@@ -26,9 +26,6 @@ data/archive/
 # 配置文件（包含敏感密钥，勿提交！）
 config.py
 
-# 工具脚本（可选）
-tools/
-
 # 系统文件
 .DS_Store
 Thumbs.db
