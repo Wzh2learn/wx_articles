@@ -1,6 +1,6 @@
 # 🚀 王往AI 公众号工作流
 
-一套完整的 AI 驱动的微信公众号内容生产工作流，从选题到发布全流程自动化。
+一套完整的 AI 驱动的微信公众号内容生产工作流，从选题到发布**全流程自动化**。
 
 ## ✨ 功能特性
 
@@ -8,7 +8,9 @@
 |------|------|--------|
 | 🎯 **选题雷达** | 全网扫描热点，动态提取关键词，智能推荐选题 | DeepSeek + DuckDuckGo |
 | ✍️ **写作智能体** | 读取研究笔记，生成符合人设的初稿 | DeepSeek Reasoner |
-| 🎨 **排版智能体** | Markdown 转 HTML，极客代码风，一键复制 | Pygments + Premailer |
+| 📋 **TODO提取器** | 列出草稿中需要补充的截图和内容 | Python Regex |
+| 🎨 **排版智能体** | Markdown 转 HTML，壹伴风格，一键复制 | Pygments + Premailer |
+| 📤 **发布智能体** | 自动上传图片，一键创建草稿 | wechatpy + 微信API |
 
 ## 📁 项目结构
 
@@ -16,25 +18,30 @@
 wx_articles/
 ├── README.md                # 项目说明
 ├── requirements.txt         # Python 依赖
-├── config.py               # 统一配置（API Key、路径、日期管理）
+├── config.py.example       # 配置模板
+├── config.py               # 你的配置（已被 gitignore）
 ├── run.py                  # 统一入口脚本
 ├── agents/                 # 智能体模块
 │   ├── __init__.py
 │   ├── trend_hunter.py     # 🎯 选题雷达
 │   ├── drafter.py          # ✍️ 写作智能体
-│   └── formatter.py        # 🎨 排版智能体
-└── data/                   # 数据目录
-    ├── input/              # 当前工作笔记
-    │   └── research_notes.txt
-    └── archive/            # 按日期归档
-        ├── 2025-12-02/     # 每次创作独立目录
-        │   ├── topic_report_1230.md
-        │   ├── research_notes.txt  # 笔记备份
-        │   ├── draft.md
-        │   ├── final.md
-        │   └── output.html
-        └── 2025-12-04/
-            └── ...
+│   ├── todo_extractor.py   # 📋 TODO 提取器
+│   ├── formatter.py        # 🎨 排版智能体
+│   └── publisher.py        # 📤 发布智能体
+└── data/archive/           # 按日期 + 阶段归档
+        └── 2025-12-02/
+            ├── 1_topics/       # 选题报告
+            │   └── report_1230.md
+            ├── 2_research/     # 研究笔记 ← 在这里编辑
+            │   └── notes.txt
+            ├── 3_drafts/       # 草稿
+            │   ├── draft.md
+            │   └── todo_list.txt
+            ├── 4_publish/      # 发布文件
+            │   ├── final.md
+            │   └── output.html
+            └── 5_assets/       # 资源文件
+                └── (图片等)
 ```
 
 ## 🛠️ 安装
@@ -59,17 +66,32 @@ pip install -r requirements.txt
 
 ### 3. 配置 API Key
 
-编辑 `config.py`，填入你的 DeepSeek API Key：
-
-```python
-DEEPSEEK_API_KEY = "sk-your-api-key-here"
-```
-
-或设置环境变量：
+复制配置模板并填入你的密钥：
 
 ```bash
-set DEEPSEEK_API_KEY=sk-your-api-key-here
+cp config.py.example config.py
 ```
+
+然后编辑 `config.py`，或通过环境变量设置：
+
+```bash
+# DeepSeek API (必需)
+set DEEPSEEK_API_KEY=sk-your-api-key-here
+
+# 微信公众号 API (可选，用于自动发布)
+set WECHAT_APP_ID=wx1234567890
+set WECHAT_APP_SECRET=your-app-secret
+```
+
+### 4. 微信公众号配置（可选）
+
+如果要使用**自动发布**功能：
+
+1. 登录 [微信公众平台](https://mp.weixin.qq.com/)
+2. 进入「设置与开发」→「基本配置」
+3. 获取 `AppID` 和 `AppSecret`
+4. 将你的公网 IP 添加到「IP 白名单」
+5. 填入 `config.py` 或设置环境变量
 
 ## 🚀 使用方法
 
@@ -77,6 +99,7 @@ set DEEPSEEK_API_KEY=sk-your-api-key-here
 
 ```bash
 # 查看帮助
+python run.py
 python run.py help
 
 # 运行选题雷达
@@ -85,8 +108,14 @@ python run.py hunt
 # 运行写作智能体
 python run.py draft
 
+# 提取 TODO 清单
+python run.py todo
+
 # 运行排版智能体
 python run.py format
+
+# 自动发布到微信草稿箱
+python run.py publish
 
 # 运行完整流程（交互式）
 python run.py all
@@ -96,13 +125,16 @@ python run.py all
 
 ```mermaid
 graph TD
-    A[python run.py hunt] -->|生成| B(archive/日期/topic_report.md)
+    A[python run.py hunt] -->|生成| B(topic_report.md)
     B -->|人工选择选题| C[NotebookLM 研究]
-    C -->|整理| D(input/research_notes.txt)
-    D -->|python run.py draft| E(archive/日期/draft.md)
-    E -->|人工润色截图| F(archive/日期/final.md)
-    F -->|python run.py format| G(archive/日期/output.html)
-    G -->|复制粘贴| H[公众号后台发布]
+    C -->|整理| D(research_notes.txt)
+    D -->|python run.py draft| E(draft.md)
+    E -->|python run.py todo| F{查看 TODO 清单}
+    F -->|人工补图润色| G(final.md)
+    G -->|python run.py format| H(output.html)
+    H -->|方式A: 手动| I[浏览器复制粘贴]
+    H -->|方式B: 自动| J[python run.py publish]
+    J -->|自动创建| K[微信草稿箱]
 ```
 
 #### Step 1: 选题 🎯
@@ -132,24 +164,50 @@ python run.py draft
 - DeepSeek Reasoner 生成初稿（流式输出）
 - 输出：`data/archive/2025-12-02/draft.md`
 
-#### Step 4: 润色 ✨
+#### Step 4: 查看 TODO 📋
+
+```bash
+python run.py todo
+```
+
+- 列出草稿中所有需要补充的内容
+- 显示图片搜索关键词建议
+- 帮助你快速定位需要处理的部分
+
+#### Step 5: 润色 ✨
 
 1. 打开今日目录下的 `draft.md`
-2. 替换 `(TODO: ...)` 为实际截图
+2. 根据 TODO 清单补充截图
 3. 润色文字，加入个人风格
 4. 保存为同目录下的 `final.md`
 
-#### Step 5: 排版发布 🎨
+#### Step 6: 排版 🎨
 
 ```bash
 python run.py format
 ```
 
 - 转换为微信公众号兼容的 HTML
-- 极客代码风（VS Code 深色主题）
+- 壹伴风格（渐变标题、卡片引用、记号笔高亮）
 - 自动复制到剪贴板
 - 输出：`data/archive/2025-12-02/output.html`
-- 去公众号后台粘贴发布！
+
+#### Step 7: 发布 📤
+
+**方式 A：手动发布**
+1. 用浏览器打开 `output.html`
+2. `Ctrl+A` 全选 → `Ctrl+C` 复制
+3. 粘贴到公众号**普通编辑模式**
+
+**方式 B：自动发布（推荐）**
+```bash
+python run.py publish
+```
+
+- 自动上传所有图片到微信服务器
+- 支持 PicGo 等图床链接自动转存
+- 自动选择第一张图作为封面
+- 一键创建草稿，去后台点发布即可！
 
 ### 📅 日期归档说明
 
@@ -163,44 +221,67 @@ python run.py format
 
 ## 🎨 排版风格
 
+采用**壹伴风格**，简洁专业：
+
 | 元素 | 样式 |
 |------|------|
 | 代码块 | VS Code 深色主题，圆角阴影 |
-| H2 标题 | 居中，橙色下划线装饰 |
-| 强调文字 | 加粗 + 醒目红色 |
-| 引用块 | 谷歌蓝左边框 |
-| 有序列表 | 橙色加粗数字 |
+| H2 标题 | 左侧微信绿竖条 + 渐变背景 |
+| H3 标题 | 简洁下划线 |
+| 强调文字 | 加粗 + 记号笔绿色高亮 |
+| 引用块 | 卡片式设计，圆角灰底 |
+| 图片 | 圆角 + 轻阴影 |
+| 链接 | 微信蓝 + 虚线下划线 |
 
 ## ⚙️ 配置说明
 
-编辑 `config.py` 自定义：
+编辑 `config.py` 或设置环境变量：
 
 ```python
-# API 配置
-DEEPSEEK_API_KEY = "your-key"
+# === API 配置 ===
+DEEPSEEK_API_KEY = "sk-your-key"  # 或 os.getenv("DEEPSEEK_API_KEY")
 
-# 代理（无需代理设为 None）
-PROXY_URL = "http://127.0.0.1:7898"
+# === 微信公众号配置 ===
+WECHAT_APP_ID = "wx1234..."       # 或 os.getenv("WECHAT_APP_ID")
+WECHAT_APP_SECRET = "secret..."   # 或 os.getenv("WECHAT_APP_SECRET")
 
-# 人设标签（用于选题过滤）
+# === 代理配置 ===
+PROXY_URL = "http://127.0.0.1:7898"  # 无需代理设为 None
+
+# === 人设标签 ===
 PERSONA_TAGS = ["AI", "DeepSeek", "效率", "工具", ...]
 ```
 
 ## 📦 依赖
 
-- Python 3.9+
-- openai
-- httpx
-- duckduckgo-search
-- beautifulsoup4
-- markdown-it-py
-- pygments
-- premailer
-- pyperclip
+```text
+Python 3.9+
+
+# 选题雷达
+duckduckgo-search, beautifulsoup4, httpx
+
+# 写作智能体
+openai
+
+# 排版智能体
+markdown-it-py, pygments, premailer, pyperclip, lxml
+
+# 发布智能体
+wechatpy, requests
+```
+
+安装命令：`pip install -r requirements.txt`
+
+## 🔒 安全说明
+
+- 所有敏感配置支持**环境变量**读取
+- 文章和图片仅在**本地 ↔ 微信服务器**之间传输
+- 不经过任何第三方服务器
+- 请勿将 `config.py` 中的真实密钥提交到公开仓库
 
 ## 🤝 作者
 
-**王往AI** - 前搜广推算法工程师，专注 AI 工作流的硬核博主
+**王往AI** - 热爱新兴技术的探索者，专注 AI 工作流的硬核博主
 
 ---
 

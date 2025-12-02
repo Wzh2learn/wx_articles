@@ -6,31 +6,29 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import httpx
 from openai import OpenAI
-from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, PROXY_URL, REQUEST_TIMEOUT, RESEARCH_NOTES_FILE, get_draft_file, archive_current_notes, get_today_dir
+from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, PROXY_URL, REQUEST_TIMEOUT, get_research_notes_file, get_draft_file, get_today_dir, get_stage_dir
 
 SYSTEM_PROMPT = """
-你叫"王往AI"。前搜广推算法工程师，现专注 AI 工作流的硬核博主。
+你叫"王往AI"。热爱新兴技术的探索者，专注 AI 工作流的硬核博主。
+你的文章风格：
+- **硬核干货**：不讲废话，直接上代码、上流程、上工具。
+- **逻辑严密**：像写技术文档一样写文章，结构清晰，层层递进。
+- **数据驱动**：能用数据说话就别用形容词。
+- **真诚**：不贩卖焦虑，只提供解决方案。
+- **极客范儿**：偶尔用一点代码梗，但要确保小白也能看懂。
 
-## 风格
-1. **逻辑清晰**：用技术视角解构问题，告诉读者怎么做和为什么。
-2. **说人话**：不堆术语，目标受众是"职场想偷懒的小白"。
-3. **犀利直接**：拒绝正确的废话，直击痛点。
+任务：
+根据用户提供的研究笔记（research_notes.txt），写一篇微信公众号文章。
 
-## 文章结构
-1. **痛点引入**：描述痛苦，制造焦虑但马上给解药。
-2. **核心实操**：
-   * Step 1 DeepSeek 思考：给出核心 Prompt 模板
-   * Step 2 Kimi 生成：强调指令细节，提醒追问技巧
-   * 避坑指南：指出新手易错点
-3. **总结升华**：技术角度点评，强调少加班。
-4. **结尾引导**：
-   * 正文已给核心 Prompt（显得大方）
-   * 话术："Prompt 核心逻辑都写上面了。**想要打包好的懒人包（含3个场景模板）**，关注我，回复【PPT】获取。"
-
-## 格式
-* Markdown 格式
-* 标题要吸引人
-* 截图位置标记：**(TODO: 此处插入 [描述] 的截图)**
+输出要求：
+1. 标题要吸引人，但不要标题党（3-5个备选）。
+2. 正文使用 Markdown 格式。
+3. **关键：遇到需要配图的地方，请按以下格式插入占位符：**
+   `> TODO: [图片描述] (搜索关键词: keyword1, keyword2)`
+   例如：`> TODO: DeepSeek 的思考过程截图 (搜索关键词: deepseek interface, ai thinking)`
+   或者 `> TODO: 展示 AI 写作效率提升的柱状图 (搜索关键词: efficiency chart, productivity growth)`
+4. 代码块要注明语言。
+5. 结尾要引导关注公众号。
 """
 
 def read_notes(filepath):
@@ -64,16 +62,16 @@ def generate_draft(notes):
 def main():
     print("\n" + "="*60 + "\n✍️ 写作智能体 - 王往AI\n" + "="*60 + "\n")
     print(f"📁 今日工作目录: {get_today_dir()}\n")
-    print(f"📖 读取 {RESEARCH_NOTES_FILE}...")
-    notes = read_notes(RESEARCH_NOTES_FILE)
+    
+    notes_file = get_research_notes_file()
+    print(f"📖 读取 {notes_file}...")
+    
+    notes = read_notes(notes_file)
     if not notes:
+        print(f"\n💡 请先在以下位置创建研究笔记：")
+        print(f"   {notes_file}")
         return
     print(f"   ✓ 共 {len(notes)} 字符\n")
-    
-    # 备份笔记到今日目录
-    backup = archive_current_notes()
-    if backup:
-        print(f"📦 笔记已备份: {backup}\n")
     
     draft = generate_draft(notes)
     if draft:
@@ -81,7 +79,10 @@ def main():
         with open(draft_file, "w", encoding="utf-8") as f:
             f.write(draft)
         print(f"✅ 初稿已保存: {draft_file}")
-        print(f"📌 下一步：打开 draft.md，人工润色后保存为 final.md（同目录）")
+        print(f"\n📌 下一步：")
+        print(f"   1. 运行 python run.py todo 查看待补充内容")
+        print(f"   2. 截图保存到 {get_stage_dir('assets')}")
+        print(f"   3. 润色后保存到 {get_stage_dir('publish')}/final.md")
 
 if __name__ == "__main__":
     main()

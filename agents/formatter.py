@@ -10,39 +10,187 @@ from pygments.lexers import get_lexer_by_name, TextLexer
 from pygments.formatters import HtmlFormatter
 from premailer import transform
 import pyperclip
-from config import get_final_file, get_html_file, get_today_dir
+from config import get_final_file, get_html_file, get_today_dir, get_stage_dir
 
 WECHAT_CSS = """
-body, .article-content { font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif; font-size: 16px; line-height: 1.75; color: #333; background: #f8f9fa; padding: 20px; }
-p { margin: 1em 0; text-align: justify; }
-h1 { font-size: 24px; font-weight: bold; text-align: center; margin: 1.5em 0 1em; padding-bottom: 10px; border-bottom: 3px solid #ff6b35; }
-h2 { font-size: 20px; font-weight: bold; text-align: center; margin: 1.8em 0 1em; padding-bottom: 12px; border-bottom: 3px solid #ff6b35; }
-h3 { font-size: 18px; font-weight: bold; margin: 1.5em 0 0.8em; padding-left: 12px; border-left: 4px solid #ff6b35; }
-strong, b { font-weight: bold; color: #d9534f; }
-em, i { font-style: italic; color: #666; }
-code:not(.hljs) { background: #fff3cd; color: #856404; padding: 2px 6px; border-radius: 4px; font-family: 'Fira Code', monospace; font-size: 14px; }
-pre { background: #1e1e1e; border-radius: 8px; padding: 16px; overflow-x: auto; margin: 1.2em 0; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
-pre code { font-family: 'Fira Code', Consolas, monospace; font-size: 14px; line-height: 1.6; color: #d4d4d4; background: none; padding: 0; }
-.highlight .k, .highlight .kn, .highlight .kd { color: #569cd6; }
-.highlight .s, .highlight .s1, .highlight .s2 { color: #ce9178; }
-.highlight .c, .highlight .c1, .highlight .cm { color: #6a9955; }
-.highlight .nf, .highlight .nb { color: #dcdcaa; }
-.highlight .nn, .highlight .nc { color: #4ec9b0; }
-.highlight .mi, .highlight .mf { color: #b5cea8; }
-blockquote { border-left: 4px solid #4285f4; background: #e8f0fe; padding: 12px 16px; margin: 1.2em 0; border-radius: 0 8px 8px 0; color: #555; font-size: 15px; }
-ul, ol { padding-left: 24px; margin: 1em 0; }
-ul li::marker { color: #ff6b35; }
-ol li { display: block; }
-ol li::before { content: counter(item) "."; counter-increment: item; font-weight: bold; color: #ff6b35; margin-right: 8px; }
-ol { counter-reset: item; }
-a { color: #4285f4; text-decoration: none; border-bottom: 1px dashed #4285f4; }
-img { max-width: 100%; border-radius: 8px; margin: 1em 0; }
-hr { border: none; height: 1px; background: linear-gradient(90deg, transparent, #ddd, transparent); margin: 2em 0; }
-.todo-marker { background: linear-gradient(135deg, #fff3cd, #ffeeba); border: 2px dashed #ffc107; border-radius: 8px; padding: 16px; margin: 1.5em 0; text-align: center; color: #856404; font-weight: bold; }
-table { width: 100%; border-collapse: collapse; margin: 1.2em 0; }
-th { background: #ff6b35; color: white; padding: 12px; text-align: left; }
-td { padding: 10px 12px; border-bottom: 1px solid #eee; }
-tr:nth-child(even) { background: #f8f9fa; }
+/* 微信公众号高级排版 - 壹伴风格 */
+body, .article-content { 
+    font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', 'Microsoft YaHei', sans-serif; 
+    font-size: 16px; 
+    line-height: 1.8; 
+    color: #333; 
+    background: #fff; 
+    padding: 20px; 
+    letter-spacing: 0.5px;
+    text-align: justify;
+}
+
+/* 段落 */
+p { 
+    margin: 20px 0; 
+    min-height: 1em; 
+}
+
+/* 标题 - 带有设计感的样式 */
+h1 { 
+    font-size: 22px; 
+    font-weight: bold; 
+    text-align: center; 
+    color: #1f2329; 
+    margin: 40px 0 20px; 
+    line-height: 1.4;
+}
+
+/* 二级标题 - 左侧竖线 + 背景色块 */
+h2 { 
+    display: inline-block;
+    font-size: 18px; 
+    font-weight: bold; 
+    color: #1f2329; 
+    margin: 40px 0 20px; 
+    padding: 5px 15px; 
+    border-left: 4px solid #07c160; /* 微信绿 */
+    background: linear-gradient(to right, rgba(7, 193, 96, 0.1), transparent);
+    border-radius: 0 4px 4px 0;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+/* 三级标题 - 简洁下划线 */
+h3 { 
+    font-size: 17px; 
+    font-weight: bold; 
+    color: #1f2329; 
+    margin: 30px 0 15px; 
+    padding-bottom: 5px;
+    border-bottom: 1px solid #eee;
+}
+
+/* 强调文字 - 记号笔效果 */
+strong, b { 
+    font-weight: bold; 
+    color: #07c160; 
+    background: rgba(7, 193, 96, 0.08);
+    padding: 0 2px;
+    border-radius: 2px;
+}
+
+em, i { 
+    font-style: italic; 
+    color: #666; 
+    font-size: 0.95em;
+}
+
+/* 引用块 - 卡片式设计 */
+blockquote { 
+    margin: 25px 0; 
+    padding: 20px; 
+    background: #f7f7f7; 
+    border-left: 6px solid #ddd; 
+    color: #555; 
+    font-size: 15px; 
+    border-radius: 4px;
+    line-height: 1.7;
+}
+
+/* 列表 - 优化缩进 */
+ul, ol { 
+    margin: 20px 0; 
+    padding-left: 25px; 
+    color: #444;
+}
+li { 
+    margin: 8px 0; 
+    line-height: 1.7;
+}
+
+/* 代码块 - 简洁深色模式 */
+pre { 
+    background: #282c34; 
+    color: #abb2bf; 
+    padding: 15px; 
+    border-radius: 6px; 
+    overflow-x: auto; 
+    margin: 25px 0; 
+    line-height: 1.5;
+    font-size: 14px;
+    font-family: Consolas, 'Courier New', monospace;
+    -webkit-overflow-scrolling: touch; /* 移动端滑动流畅 */
+}
+code {
+    font-family: Consolas, 'Courier New', monospace;
+}
+/* 行内代码 */
+p code, li code { 
+    background: #f0f0f0; 
+    color: #c7254e; 
+    padding: 2px 5px; 
+    border-radius: 3px; 
+    font-size: 0.9em; 
+    margin: 0 2px;
+}
+
+/* 链接 */
+a { 
+    color: #576b95; 
+    text-decoration: none; 
+    border-bottom: 1px dashed #576b95;
+    padding-bottom: 1px;
+}
+
+/* 图片 - 圆角 + 阴影 */
+img { 
+    display: block; 
+    max-width: 100%; 
+    border-radius: 6px; 
+    margin: 25px auto; 
+    box-shadow: 0 2px 10px rgba(0,0,0,0.05); 
+}
+
+/* 分割线 */
+hr { 
+    border: none; 
+    height: 1px; 
+    background: #e0e0e0; 
+    margin: 40px 0; 
+}
+
+/* TODO 占位符 - 醒目提示 */
+.todo-marker { 
+    display: block;
+    background: #fff9c4; 
+    border: 2px dashed #fbc02d; 
+    border-radius: 8px; 
+    padding: 20px; 
+    margin: 30px 0; 
+    text-align: center; 
+    color: #f57f17; 
+    font-size: 15px; 
+    font-weight: bold;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+}
+
+/* 表格 */
+table { 
+    width: 100%; 
+    border-collapse: collapse; 
+    margin: 25px 0; 
+    font-size: 14px; 
+}
+th { 
+    background: #f2f2f2; 
+    color: #333; 
+    font-weight: bold; 
+    padding: 12px 10px; 
+    text-align: left; 
+    border-bottom: 2px solid #ddd;
+}
+td { 
+    padding: 12px 10px; 
+    border-bottom: 1px solid #eee; 
+    color: #555;
+}
+tr:nth-child(even) { background: #fcfcfc; }
 """
 
 def highlight_code(code, lang):
@@ -70,14 +218,28 @@ def convert_md_to_html(md_content):
     return html
 
 def inline_css(html):
-    full = f"<!DOCTYPE html><html><head><style>{WECHAT_CSS}</style></head><body><div class='article-content'>{html}</div></body></html>"
+    """将 CSS 内联到 HTML 元素中，生成适合复制到微信的富文本"""
+    full = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>微信公众号文章预览</title>
+    <style>{WECHAT_CSS}</style>
+</head>
+<body style="max-width: 600px; margin: 40px auto; padding: 20px;">
+    <div class="article-content">{html}</div>
+    <div style="margin-top: 40px; padding: 20px; background: #e8f5e9; border-radius: 8px; text-align: center;">
+        <p style="color: #2e7d32; font-weight: bold; margin: 0;">📋 复制方法：</p>
+        <p style="color: #555; margin: 10px 0 0 0;">全选上方内容 (Ctrl+A) → 复制 (Ctrl+C) → 粘贴到公众号<strong>普通编辑模式</strong></p>
+    </div>
+</body>
+</html>"""
     try:
-        inlined = transform(full, remove_classes=False, keep_style_tags=False)
-        match = re.search(r"<div class=['\"]article-content['\"]>(.*?)</div>\s*</body>", inlined, re.DOTALL)
-        return match.group(1).strip() if match else inlined
+        inlined = transform(full, remove_classes=False, keep_style_tags=True)
+        return inlined
     except Exception as e:
         print(f"⚠️ CSS内联失败: {e}")
-        return html
+        return full
 
 def main():
     print("\n" + "="*60 + "\n🎨 排版智能体 - 极客代码风\n" + "="*60 + "\n")
@@ -90,7 +252,7 @@ def main():
     
     if not os.path.exists(final_file):
         print(f"❌ 找不到 {final_file}")
-        print(f"   请先在今日目录下创建 final.md（润色后的定稿）")
+        print(f"   请先将润色后的定稿保存到: {get_stage_dir('publish')}/final.md")
         return
     
     with open(final_file, "r", encoding="utf-8") as f:
@@ -114,11 +276,12 @@ def main():
     
     print("="*60)
     print("✅ 排版完成！")
-    print("\n📌 下一步：")
-    print("   1. 打开公众号后台 -> 新建图文")
-    print("   2. 点击 </> 切换 HTML 模式")
-    print("   3. Ctrl+V 粘贴")
-    print("   4. 再点 </> 预览效果")
+    print("\n📌 下一步（重要！）：")
+    print(f"   1. 用浏览器打开: {html_file}")
+    print("   2. 在页面上 Ctrl+A 全选内容")
+    print("   3. Ctrl+C 复制")
+    print("   4. 到公众号【普通编辑模式】Ctrl+V 粘贴")
+    print("   ⚠️  不要用 HTML 模式！直接粘贴富文本！")
     print("="*60)
 
 if __name__ == "__main__":

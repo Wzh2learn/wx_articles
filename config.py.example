@@ -1,0 +1,137 @@
+"""
+===============================================================================
+                    ⚙️ 统一配置文件 (config.py)
+===============================================================================
+所有智能体共享的配置项，修改这里即可全局生效
+
+使用方法：
+1. 复制此文件为 config.py
+2. 填入你的真实 API Key 和密钥
+3. config.py 已被 .gitignore 排除，不会被提交
+===============================================================================
+"""
+
+import os
+from datetime import datetime
+
+# ================= API 配置 =================
+
+# DeepSeek API Key（优先从环境变量读取）
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY") or "sk-your-deepseek-api-key"
+
+# DeepSeek API 地址
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+
+# ================= 网络配置 =================
+
+# 代理地址（如果不需要代理，设为 None）
+PROXY_URL = "http://127.0.0.1:7898"
+
+# 请求超时时间（秒）
+REQUEST_TIMEOUT = 120
+
+# ================= 微信公众号配置 =================
+
+# 微信公众号配置 (在公众号后台-开发-基本配置中获取)
+# 支持环境变量: WECHAT_APP_ID, WECHAT_APP_SECRET
+# 注意：不要将真实密钥提交到公开仓库！
+WECHAT_APP_ID = os.getenv("WECHAT_APP_ID") or "wx-your-app-id"
+WECHAT_APP_SECRET = os.getenv("WECHAT_APP_SECRET") or "your-app-secret"
+
+# ================= 路径配置 =================
+
+# 项目根目录
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# 数据目录
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+ARCHIVE_DIR = os.path.join(DATA_DIR, "archive")
+
+# ================= 日期目录管理 =================
+
+# 工作流阶段目录（数字前缀保证排序）
+STAGE_DIRS = {
+    "topics": "1_topics",      # 选题报告
+    "research": "2_research",  # 调研笔记
+    "drafts": "3_drafts",      # 草稿
+    "publish": "4_publish",    # 发布文件
+    "assets": "5_assets",      # 资源文件（图片等）
+}
+
+def get_today_dir():
+    """获取今天的归档目录，如果不存在则创建"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_dir = os.path.join(ARCHIVE_DIR, today)
+    os.makedirs(today_dir, exist_ok=True)
+    return today_dir
+
+def get_stage_dir(stage):
+    """获取今天某个阶段的目录"""
+    stage_name = STAGE_DIRS.get(stage, stage)
+    stage_dir = os.path.join(get_today_dir(), stage_name)
+    os.makedirs(stage_dir, exist_ok=True)
+    return stage_dir
+
+def get_today_file(filename, stage=None):
+    """获取今天归档目录下的文件路径，可指定阶段"""
+    if stage:
+        return os.path.join(get_stage_dir(stage), filename)
+    return os.path.join(get_today_dir(), filename)
+
+# ================= 各阶段文件路径 =================
+
+def get_topic_report_file():
+    """选题报告"""
+    timestamp = datetime.now().strftime("%H%M")
+    return get_today_file(f"report_{timestamp}.md", "topics")
+
+def get_research_notes_file():
+    """研究笔记（直接在日期目录下编辑）"""
+    return get_today_file("notes.txt", "research")
+
+def get_draft_file():
+    """草稿"""
+    return get_today_file("draft.md", "drafts")
+
+def get_todo_file():
+    """TODO 清单"""
+    return get_today_file("todo_list.txt", "drafts")
+
+def get_final_file():
+    """定稿"""
+    return get_today_file("final.md", "publish")
+
+def get_html_file():
+    """HTML 输出"""
+    return get_today_file("output.html", "publish")
+
+def get_assets_dir():
+    """资源目录（图片等）"""
+    return get_stage_dir("assets")
+
+
+# ================= 人设配置 =================
+
+# 博主人设标签（用于选题过滤）
+PERSONA_TAGS = [
+    "AI", "人工智能", "大模型", "LLM", "DeepSeek", "Kimi", "ChatGPT", "Cursor",
+    "效率", "工具", "工作流", "自动化", "提示词", "Prompt", "Agent", "RAG"
+]
+
+# ================= 初始化 =================
+
+def setup_proxy():
+    """设置代理环境变量"""
+    if PROXY_URL:
+        os.environ['HTTP_PROXY'] = PROXY_URL
+        os.environ['HTTPS_PROXY'] = PROXY_URL
+        os.environ['http_proxy'] = PROXY_URL
+        os.environ['https_proxy'] = PROXY_URL
+
+def ensure_dirs():
+    """确保必要的目录存在"""
+    os.makedirs(ARCHIVE_DIR, exist_ok=True)
+
+# 自动初始化
+setup_proxy()
+ensure_dirs()

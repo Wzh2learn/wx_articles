@@ -6,12 +6,14 @@
     python run.py hunt     # 运行选题雷达
     python run.py draft    # 运行写作智能体
     python run.py format   # 运行排版智能体
+    python run.py todo     # 提取草稿中的TODO事项
     python run.py all      # 运行完整流程（需人工介入）
 ===============================================================================
 """
 
 import sys
 import os
+import argparse
 
 # 确保可以导入 agents 模块
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -27,6 +29,8 @@ def print_help():
 ║    hunt    - 🎯 选题雷达 (扫描全网热点，推荐选题)            ║
 ║    draft   - ✍️ 写作智能体 (读取笔记，生成初稿)              ║
 ║    format  - 🎨 排版智能体 (转换HTML，复制到剪贴板)          ║
+║    todo    - 📋 提取TODO (列出草稿中需补充的内容)            ║
+║    publish - 📤 自动发布 (上传图片 & 新建草稿)               ║
 ║    all     - 🔄 完整流程 (依次运行，需人工介入)              ║
 ║    help    - 📖 显示帮助                                     ║
 ╠══════════════════════════════════════════════════════════════╣
@@ -34,21 +38,26 @@ def print_help():
 ║    1. hunt  -> 获取选题                                      ║
 ║    2. 人工  -> NotebookLM 研究，整理 research_notes.txt      ║
 ║    3. draft -> 生成 draft.md                                 ║
-║    4. 人工  -> 润色，截图，保存为 final.md                   ║
-║    5. format-> 生成 HTML，复制到公众号发布                   ║
+║    4. todo  -> 查看需要补充的截图等                          ║
+║    5. 人工  -> 润色，截图，保存为 final.md                   ║
+║    6. format-> 生成 HTML，复制到公众号发布                   ║
 ╚══════════════════════════════════════════════════════════════╝
 """)
 
-def run_hunt():
+def run_hunter():
     from agents.trend_hunter import main
     main()
 
-def run_draft():
+def run_drafter():
     from agents.drafter import main
     main()
 
-def run_format():
+def run_formatter():
     from agents.formatter import main
+    main()
+
+def run_todo():
+    from agents.todo_extractor import main
     main()
 
 def run_all():
@@ -60,35 +69,35 @@ def run_all():
     print("="*60)
     print("📡 Phase 1: 选题雷达")
     print("="*60)
-    run_hunt()
+    run_hunter()
     
     print("\n" + "="*60)
     print("⏸️  人工介入点")
     print("="*60)
     print("请完成以下步骤后，按 Enter 继续：")
-    print(f"  1. 查看 {today}/topic_report_*.md 选择选题")
+    print(f"  1. 查看 {today}/1_topics/ 下的选题报告")
     print("  2. 去 NotebookLM 做深度研究")
-    print("  3. 整理笔记到 data/input/research_notes.txt")
+    print(f"  3. 整理笔记到 {today}/2_research/notes.txt")
     input("\n按 Enter 继续...")
     
     print("\n" + "="*60)
     print("✍️ Phase 2: 写作智能体")
     print("="*60)
-    run_draft()
+    run_drafter()
     
     print("\n" + "="*60)
     print("⏸️  人工介入点")
     print("="*60)
     print("请完成以下步骤后，按 Enter 继续：")
-    print(f"  1. 打开 {today}/draft.md 进行润色")
-    print("  2. 截图替换 TODO 标记")
-    print(f"  3. 保存为 {today}/final.md")
+    print(f"  1. 打开 {today}/3_drafts/draft.md 进行润色")
+    print(f"  2. 截图保存到 {today}/5_assets/ 目录")
+    print(f"  3. 保存定稿到 {today}/4_publish/final.md")
     input("\n按 Enter 继续...")
     
     print("\n" + "="*60)
     print("🎨 Phase 3: 排版智能体")
     print("="*60)
-    run_format()
+    run_formatter()
     
     print("\n" + "="*60)
     print("🎉 工作流完成！")
@@ -96,24 +105,24 @@ def run_all():
     print("HTML 已复制到剪贴板，去公众号后台发布吧！")
 
 def main():
-    if len(sys.argv) < 2:
-        print_help()
-        return
-    
-    cmd = sys.argv[1].lower()
-    
-    if cmd == "hunt":
-        run_hunt()
-    elif cmd == "draft":
-        run_draft()
-    elif cmd == "format":
-        run_format()
-    elif cmd == "all":
+    parser = argparse.ArgumentParser(description='王往AI 公众号工作流')
+    parser.add_argument('command', choices=['hunt', 'draft', 'format', 'todo', 'publish', 'all', 'help'], help='执行的命令', nargs='?', default='help')
+    args = parser.parse_args()
+
+    if args.command == 'hunt':
+        run_hunter()
+    elif args.command == 'draft':
+        run_drafter()
+    elif args.command == 'format':
+        run_formatter()
+    elif args.command == 'todo':
+        run_todo()
+    elif args.command == 'publish':
+        from agents.publisher import publish_draft
+        publish_draft()
+    elif args.command == 'all':
         run_all()
-    elif cmd == "help":
-        print_help()
     else:
-        print(f"❌ 未知命令: {cmd}")
         print_help()
 
 if __name__ == "__main__":
