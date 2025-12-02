@@ -1,0 +1,19 @@
+# ================= 王往AI 公众号工作流依赖 =================
+
+# === 选题雷达 (trend_hunter.py) ===
+duckduckgo-search>=6.0.0
+beautifulsoup4>=4.12.0
+httpx>=0.27.0
+
+# === 写作智能体 (drafter.py) ===
+openai>=1.0.0
+
+# === 排版智能体 (formatter.py) ===
+markdown-it-py>=3.0.0
+pygments>=2.17.0
+premailer>=3.10.0
+pyperclip>=1.8.0
+lxml>=5.0.0
+
+# === 安装命令 ===
+# pip install -r requirements.txt --proxy http://127.0.0.1:7898
