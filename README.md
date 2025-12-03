@@ -147,11 +147,14 @@ graph TD
 python run.py hunt
 ```
 
-- DeepSeek 智能生成搜索关键词
-- Tavily API 联网搜索最新 AI 热点
-- 补充扫描 GitHub Trending
-- 推荐 3 个最适合你人设的选题
-- 输出：`data/archive/2025-12-02/topic_report_1230.md`
+**v7.0 价值挖掘终极版 (Value Hacker)**
+- **心理学三路搜索**：
+    - 🎯 **A路 (锚点)**：死磕顶流 (DeepSeek/Kimi/Cursor) 隐藏玩法
+    - ⚡ **B路 (收益)**：挖掘 Life Hack 效率神器，主打"3分钟上手"
+    - 🛡️ **C路 (损失)**：扫描"避坑"、"智商税"、"平替"等高点击率话题
+- **价值过滤器**：剔除行业新闻/宏大叙事，只保留"获得感"强的实用选题
+- **渠道深挖**：新闻 + 微信/小红书/知乎/B站 + GitHub Trending
+- 输出：`data/archive/YYYY-MM-DD/topic_report.md`
 
 #### Step 2: 研究 📚
 
