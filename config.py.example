@@ -22,6 +22,12 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY") or "sk-your-deepseek-api-key"
 # DeepSeek API 地址
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
+# ================= 搜索配置 =================
+
+# Tavily Search API (推荐: https://tavily.com)
+# 留空则搜索功能受限
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY") or ""
+
 # ================= 网络配置 =================
 
 # 代理地址（如果不需要代理，设为 None）

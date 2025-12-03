@@ -6,7 +6,7 @@
 
 | 模块 | 功能 | 技术栈 |
 |------|------|--------|
-| 🎯 **选题雷达** | 全网扫描热点，动态提取关键词，智能推荐选题 | DeepSeek + DuckDuckGo |
+| 🎯 **选题雷达** | 全网扫描热点，AI动态生成搜索词，智能推荐选题 | DeepSeek + Tavily API |
 | ✍️ **写作智能体** | 读取研究笔记，生成符合人设的初稿 | DeepSeek Reasoner |
 | 📋 **TODO提取器** | 列出草稿中需要补充的截图和内容 | Python Regex |
 | 🎨 **排版智能体** | Markdown 转 HTML，壹伴风格，一键复制 | Pygments + Premailer |
@@ -78,6 +78,10 @@ cp config.py.example config.py
 # DeepSeek API (必需)
 set DEEPSEEK_API_KEY=sk-your-api-key-here
 
+# Tavily Search API (推荐，免费额度足够)
+# 申请地址：https://tavily.com
+set TAVILY_API_KEY=tvly-your-api-key
+
 # 微信公众号 API (可选，用于自动发布)
 set WECHAT_APP_ID=wx1234567890
 set WECHAT_APP_SECRET=your-app-secret
@@ -143,8 +147,9 @@ graph TD
 python run.py hunt
 ```
 
-- 自动扫描 GitHub Trending、ReadHub、小红书、微博、少数派
-- AI 动态提取今日热词
+- DeepSeek 智能生成搜索关键词
+- Tavily API 联网搜索最新 AI 热点
+- 补充扫描 GitHub Trending
 - 推荐 3 个最适合你人设的选题
 - 输出：`data/archive/2025-12-02/topic_report_1230.md`
 
@@ -152,7 +157,7 @@ python run.py hunt
 
 1. 选择一个选题
 2. 去 [NotebookLM](https://notebooklm.google.com/) 做深度研究
-3. 整理笔记到 `data/input/research_notes.txt`
+3. 整理笔记到 `data/archive/YYYY-MM-DD/2_research/notes.txt`
 
 #### Step 3: 写初稿 ✍️
 
@@ -240,6 +245,7 @@ python run.py publish
 ```python
 # === API 配置 ===
 DEEPSEEK_API_KEY = "sk-your-key"  # 或 os.getenv("DEEPSEEK_API_KEY")
+TAVILY_API_KEY = "tvly-your-key"  # 或 os.getenv("TAVILY_API_KEY")
 
 # === 微信公众号配置 ===
 WECHAT_APP_ID = "wx1234..."       # 或 os.getenv("WECHAT_APP_ID")
@@ -258,7 +264,7 @@ PERSONA_TAGS = ["AI", "DeepSeek", "效率", "工具", ...]
 Python 3.9+
 
 # 选题雷达
-duckduckgo-search, beautifulsoup4, httpx
+httpx, beautifulsoup4 (Tavily API 无需额外依赖)
 
 # 写作智能体
 openai
