@@ -106,8 +106,11 @@ set WECHAT_APP_SECRET=your-app-secret
 python run.py
 python run.py help
 
-# 运行选题雷达
+# 运行选题雷达 (可多次运行)
 python run.py hunt
+
+# 综合多次报告，输出最终选题 + 3个提示词
+python run.py final
 
 # 运行写作智能体
 python run.py draft
@@ -129,21 +132,23 @@ python run.py all
 
 ```mermaid
 graph TD
-    A[python run.py hunt] -->|生成| B(topic_report.md)
-    B -->|人工选择选题| C[NotebookLM 研究]
-    C -->|整理| D(research_notes.txt)
-    D -->|python run.py draft| E(draft.md)
-    E -->|python run.py todo| F{查看 TODO 清单}
-    F -->|人工补图润色| G(final.md)
+    A[hunt ×N 早/中/晚] -->|多次扫描| B(report_xxxx.md × N)
+    B -->|python run.py final| C[FINAL_DECISION.md + 3个提示词]
+    C -->|提示词1: Fast Research| D[NotebookLM 搜索素材]
+    D -->|整理| E(research_notes.txt)
+    E -->|python run.py draft| F(draft.md)
+    F -->|人工补图润色 + 提示词3: 配图| G(final.md)
     G -->|python run.py format| H(output.html)
     H -->|方式A: 手动| I[浏览器复制粘贴]
     H -->|方式B: 自动| J[python run.py publish]
-    J -->|自动创建| K[微信草稿箱]
 ```
 
-#### Step 1: 选题 🎯
+#### Step 1: 多次扫描选题 🎯
 
 ```bash
+# 建议早/中/晚各运行一次，积累多份报告
+python run.py hunt
+python run.py hunt
 python run.py hunt
 ```
 
@@ -154,18 +159,27 @@ python run.py hunt
     - 🛡️ **C路 (损失)**：扫描"避坑"、"智商税"、"平替"等高点击率话题
 - **价值过滤器**：剔除行业新闻/宏大叙事，只保留"获得感"强的实用选题
 - **工作流自动化**：自动创建 `research/`、`drafts/` 等后续文件夹
-- 输出：
-    - `data/archive/YYYY-MM-DD/1_topics/report_xxxx.md` (选题报告)
-    - `data/archive/YYYY-MM-DD/2_research/notes.txt` (空白笔记)
-    - **NotebookLM 专属提示词** (控制台直接打印)
+- 输出：`data/archive/YYYY-MM-DD/1_topics/report_xxxx.md`
+
+#### Step 1.5: 综合决策 🏆 (新!)
+
+```bash
+python run.py final
+```
+
+- **读取当天所有报告**，综合分析后给出最终推荐
+- 输出 **3 个结构化提示词**：
+    - 📡 **提示词1: Fast Research** → 用于 NotebookLM 搜索素材
+    - ✍️ **提示词2: 草稿大纲** → 用于生成文章框架
+    - 🎨 **提示词3: 视觉脚本** → 用于配图方案
+- 输出文件：`data/archive/YYYY-MM-DD/1_topics/FINAL_DECISION.md`
 
 #### Step 2: 研究 📚
 
-1. 选择一个选题
-2. 去 [NotebookLM](https://notebooklm.google.com/) 导入相关资料（网页/PDF）
-3. **复制控制台输出的 Prompt**，粘贴给 NotebookLM
-    - 它会生成一份包含 **深度简报 + 视觉脚本** 的完美笔记
-4. 将生成的内容粘贴到 `data/archive/YYYY-MM-DD/2_research/notes.txt`
+1. 复制 **提示词1: Fast Research**，在 [NotebookLM](https://notebooklm.google.com/) 中搜索相关资料
+2. 导入搜索到的网页/PDF 作为 Source
+3. 复制 **提示词2: 草稿大纲**，让 NotebookLM 生成深度笔记
+4. 将笔记粘贴到 `data/archive/YYYY-MM-DD/2_research/notes.txt`
 
 #### Step 3: 写初稿 ✍️
 
