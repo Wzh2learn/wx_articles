@@ -259,8 +259,9 @@ def step3_final_decision(scan_data, client):
     """
     
     try:
+        # 单次扫描用 chat 模型（快、便宜），综合决策才用 reasoner
         response = client.chat.completions.create(
-            model="deepseek-reasoner",
+            model="deepseek-chat",
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": f"【深度验证情报】\n{scan_data}"}
