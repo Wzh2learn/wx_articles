@@ -115,17 +115,15 @@ python run.py final
 # 运行写作智能体
 python run.py draft
 
-# 提取 TODO 清单
-python run.py todo
+# 指定日期 (处理历史素材)
+python run.py draft -d 1204        # MMDD 简写
+python run.py final -d 2025-12-04  # 完整格式
 
 # 运行排版智能体
 python run.py format
 
 # 自动发布到微信草稿箱
 python run.py publish
-
-# 运行完整流程（交互式）
-python run.py all
 ```
 
 ### 完整工作流
@@ -161,17 +159,18 @@ python run.py hunt
 - **工作流自动化**：自动创建 `research/`、`drafts/` 等后续文件夹
 - 输出：`data/archive/YYYY-MM-DD/1_topics/report_xxxx.md`
 
-#### Step 1.5: 综合决策 🏆 (新!)
+#### Step 1.5: 综合决策 🏆
 
 ```bash
-python run.py final
+python run.py final           # 处理今天的报告
+python run.py final -d 1204   # 处理指定日期的报告
 ```
 
-- **读取当天所有报告**，综合分析后给出最终推荐
+- **读取指定日期所有报告**，综合分析后给出最终推荐
 - 输出 **3 个结构化提示词**：
     - 📡 **提示词1: Fast Research** → 用于 NotebookLM 搜索素材
-    - ✍️ **提示词2: 草稿大纲** → 用于生成文章框架
-    - 🎨 **提示词3: 视觉脚本** → 用于配图方案
+    - ✍️ **提示词2: 草稿大纲** → 复制到 NotebookLM，它会根据 Sources 完善大纲
+    - 🎨 **提示词3: 视觉脚本** → 点击 Studio → **Infographic** 生成信息图
 - 输出文件：`data/archive/YYYY-MM-DD/1_topics/FINAL_DECISION.md`
 
 #### Step 2: 研究 📚
@@ -184,7 +183,8 @@ python run.py final
 #### Step 3: 写初稿 ✍️
 
 ```bash
-python run.py draft
+python run.py draft            # 处理今天的笔记
+python run.py draft -d 1204    # 处理指定日期的笔记
 ```
 
 - 读取研究笔记（自动备份到今日目录）
