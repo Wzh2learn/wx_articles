@@ -147,20 +147,25 @@ graph TD
 python run.py hunt
 ```
 
-**v7.0 价值挖掘终极版 (Value Hacker)**
+**v7.2 价值挖掘终极版 (Value Hacker)**
 - **心理学三路搜索**：
     - 🎯 **A路 (锚点)**：死磕顶流 (DeepSeek/Kimi/Cursor) 隐藏玩法
     - ⚡ **B路 (收益)**：挖掘 Life Hack 效率神器，主打"3分钟上手"
     - 🛡️ **C路 (损失)**：扫描"避坑"、"智商税"、"平替"等高点击率话题
 - **价值过滤器**：剔除行业新闻/宏大叙事，只保留"获得感"强的实用选题
-- **渠道深挖**：新闻 + 微信/小红书/知乎/B站 + GitHub Trending
-- 输出：`data/archive/YYYY-MM-DD/topic_report.md`
+- **工作流自动化**：自动创建 `research/`、`drafts/` 等后续文件夹
+- 输出：
+    - `data/archive/YYYY-MM-DD/1_topics/report_xxxx.md` (选题报告)
+    - `data/archive/YYYY-MM-DD/2_research/notes.txt` (空白笔记)
+    - **NotebookLM 专属提示词** (控制台直接打印)
 
 #### Step 2: 研究 📚
 
 1. 选择一个选题
-2. 去 [NotebookLM](https://notebooklm.google.com/) 做深度研究
-3. 整理笔记到 `data/archive/YYYY-MM-DD/2_research/notes.txt`
+2. 去 [NotebookLM](https://notebooklm.google.com/) 导入相关资料（网页/PDF）
+3. **复制控制台输出的 Prompt**，粘贴给 NotebookLM
+    - 它会生成一份包含 **深度简报 + 视觉脚本** 的完美笔记
+4. 将生成的内容粘贴到 `data/archive/YYYY-MM-DD/2_research/notes.txt`
 
 #### Step 3: 写初稿 ✍️
 
