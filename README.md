@@ -219,40 +219,80 @@ python run.py todo
 - 显示图片搜索关键词建议
 - 帮助你快速定位需要处理的部分
 
-#### Step 5: 润色 ✨
+#### Step 5: 润色 + 配图 ✨
 
-1. 打开今日目录下的 `draft.md`
-2. 根据 TODO 清单补充截图
-3. 润色文字，加入个人风格
-4. 保存为同目录下的 `final.md`
+1. 打开 `3_drafts/draft.md`，润色文字
+2. **截图保存到 `5_assets/` 文件夹**
+3. **在 `final.md` 中引用图片**（见下方示例）
+4. 保存到 `4_publish/final.md`
+
+**📸 图片引用示例**：
+
+```markdown
+# 别再给 Cursor 送钱了！
+
+## 🔥 痛点：每月 20 刀太贵了
+
+很多人用 Cursor 写代码，但免费额度用完就要付费...
+
+![Cursor 收费页面截图](cursor-pricing.png)
+
+## 💡 解决方案：Gemini Code Assist
+
+Google 有个免费的平替工具，功能一样强！
+
+![Gemini Code Assist 界面](gemini-interface.png)
+
+## 📝 三步开启隐藏模式
+
+**第一步**：安装 VS Code 扩展
+
+![安装步骤截图](step1-install.png)
+
+**第二步**：启用 Agent 模式
+
+![启用 Agent 模式](step2-enable.png)
+
+---
+**关注我，下次继续聊 AI 工具的骚操作 👆**
+```
+
+**文件结构**：
+```
+2025-12-04/
+├── 4_publish/
+│   └── final.md              # 引用图片: ![](xxx.png)
+└── 5_assets/
+    ├── cursor-pricing.png    # 截图1
+    ├── gemini-interface.png  # 截图2
+    ├── step1-install.png     # 截图3
+    └── step2-enable.png      # 截图4
+```
 
 #### Step 6: 排版 🎨
 
 ```bash
-python run.py format
+python run.py format -d 1204
 ```
 
 - 转换为微信公众号兼容的 HTML
 - 壹伴风格（渐变标题、卡片引用、记号笔高亮）
 - 自动复制到剪贴板
-- 输出：`data/archive/2025-12-02/output.html`
 
-#### Step 7: 发布 📤
+#### Step 7: 发布 📤（推荐自动）
 
-**方式 A：手动发布**
-1. 用浏览器打开 `output.html`
-2. `Ctrl+A` 全选 → `Ctrl+C` 复制
-3. 粘贴到公众号**普通编辑模式**
-
-**方式 B：自动发布（推荐）**
 ```bash
-python run.py publish
+python run.py publish -d 1204
 ```
 
-- 自动上传所有图片到微信服务器
-- 支持 PicGo 等图床链接自动转存
-- 自动选择第一张图作为封面
-- 一键创建草稿，去后台点发布即可！
+- ✅ 自动从 `assets/` 读取图片并上传到微信
+- ✅ 第一张图自动作为封面
+- ✅ 一键创建草稿，去后台点发布即可！
+
+**手动发布**（图片需用图床）：
+1. 浏览器打开 `output.html`
+2. `Ctrl+A` 全选 → `Ctrl+C` 复制
+3. 粘贴到公众号**普通编辑模式**
 
 ### 📅 日期归档说明
 
