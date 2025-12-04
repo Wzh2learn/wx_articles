@@ -251,6 +251,31 @@ def step3_final_decision(scan_data, client):
     """Step 3: 决策"""
     print("\n" + "="*50 + "\n📝 DeepSeek 主编审核中...\n" + "="*50)
     
+    print("\n" + "="*50)
+    print("💡 NotebookLM 提示词 (请复制到 NotebookLM)")
+    print("="*50)
+    print("""
+请基于我提供的资料，生成一份【深度内容简报 + 视觉脚本】。
+目标读者是：希望提升工作效率的职场人 / 想要学习AI的小白。
+
+### PART 1: 深度简报 (用于写文章)
+1. **核心观点 (The Hook)**：一句话总结这个工具/技巧最大的价值（省了多少钱？快了多少倍？）。
+2. **痛点打击 (Pain Points)**：用户在没有这个工具前，遇到了什么具体麻烦？
+3. **实操步骤 (How-to)**：提取出具体的步骤、指令或参数配置（不要泛泛而谈）。
+4. **避坑指南 (Watch Out)**：有什么限制、收费陷阱或常见报错？
+5. **精彩金句 (Quotes)**：原文中那些直击人心的句子。
+
+### PART 2: 视觉脚本 (用于配图)
+请根据内容，建议 3-5 张关键配图方案：
+* **[截图]**：需要截取软件的哪个具体界面？(例如：DeepSeek API Key 的创建页面)
+* **[对比图]**：需要对比哪些核心数据？(例如：V3 vs GPT-4 的价格/速度对比表)
+* **[示例图]**：需要展示什么样的生成效果？(例如：生成的代码片段截图)
+* **[梗图/表情]**：有什么槽点或反差适合做表情包？
+
+请用 Markdown 格式输出，逻辑清晰，干货满满。
+""")
+    print("="*50)
+    
     prompt = f"""
     {EDITOR_PROMPT}
     
@@ -296,14 +321,70 @@ EDITOR_PROMPT = """
 * **获得感**：[用户看完能得到什么？省钱？省时？]
 * **心理锚点**：[利用了什么心理？贪便宜？怕落后？]
 * **核心看点**：[文章大纲，包含具体的工具/技巧]
+---
+## 今日主推
+告诉我不写会后悔的那个 (获得感最强的)。
+"""
 
-from config import (
-    DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, PROXY_URL, REQUEST_TIMEOUT,
-    TAVILY_API_KEY, get_topic_report_file, get_today_dir, 
-    get_stage_dir, get_research_notes_file
-)
+def auto_init_workflow():
+    """自动初始化后续工作流文件夹和文件"""
+    print("\n⚙️ 正在初始化后续工作流...")
+    
+    # 1. 预创建所有阶段文件夹
+    from config import get_stage_dir, get_research_notes_file # 局部导入避免循环引用风险
+    stages = ["research", "drafts", "publish", "assets"]
+    for stage in stages:
+        path = get_stage_dir(stage)
+        print(f"   📂 目录就绪: {path}")
+        
+    # 2. 创建空白研究笔记
+    notes_file = get_research_notes_file()
+    if not os.path.exists(notes_file):
+        with open(notes_file, "w", encoding="utf-8") as f:
+            f.write("# 研究笔记\n\n请将 NotebookLM 生成的 Briefing Doc 粘贴在这里...\n")
+        print(f"   📄 笔记文件已创建: {notes_file}")
+        
+    # 3. 输出 NotebookLM 提示词
+    print("\n" + "="*50)
+    print("💡 NotebookLM 提示词 (请复制到 NotebookLM)")
+    print("="*50)
+    print("""
+请基于我提供的资料，生成一份【深度内容简报 + 视觉脚本】。
+目标读者是：希望提升工作效率的职场人 / 想要学习AI的小白。
 
-# ... (省略中间代码) ...
+### PART 1: 深度简报 (用于写文章)
+1. **核心观点 (The Hook)**：一句话总结这个工具/技巧最大的价值（省了多少钱？快了多少倍？）。
+2. **痛点打击 (Pain Points)**：用户在没有这个工具前，遇到了什么具体麻烦？
+3. **实操步骤 (How-to)**：提取出具体的步骤、指令或参数配置（不要泛泛而谈）。
+4. **避坑指南 (Watch Out)**：有什么限制、收费陷阱或常见报错？
+5. **精彩金句 (Quotes)**：原文中那些直击人心的句子。
+
+### PART 2: 视觉脚本 (用于配图)
+请根据内容，建议 3-5 张关键配图方案：
+* **[截图]**：需要截取软件的哪个具体界面？(例如：DeepSeek API Key 的创建页面)
+* **[对比图]**：需要对比哪些核心数据？(例如：V3 vs GPT-4 的价格/速度对比表)
+* **[示例图]**：需要展示什么样的生成效果？(例如：生成的代码片段截图)
+* **[梗图/表情]**：有什么槽点或反差适合做表情包？
+
+请用 Markdown 格式输出，逻辑清晰，干货满满。
+""")
+    print("="*50)
+
+def save_report(raw_data, analysis):
+    filename = get_topic_report_file()
+    content = f"# 🚀 选题雷达报告 v7.0 ({CURRENT_CONFIG['name']})\n\n**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n**策略**: {CURRENT_CONFIG['strategy']}\n\n## 深度验证情报\n{raw_data}\n\n## 选题分析\n{analysis}"
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(content)
+    print(f"\n\n📁 报告已保存: {filename}")
+    
+    # 保存后自动初始化工作流
+    auto_init_workflow()
+
+def main():
+    print("\n" + "="*60 + "\n🚀 全网选题雷达 v7.0 (价值挖掘版) - 王往AI\n" + "="*60 + "\n")
+    
+    search_tool = WebSearchTool()
+    
     # DeepSeek 建议直连，不走代理 (除非 api.deepseek.com 被墙)
     # 这里我们将 proxy 设为 None，确保它不走 PROXY_URL
     with httpx.Client(proxy=None, timeout=REQUEST_TIMEOUT) as http_client:
