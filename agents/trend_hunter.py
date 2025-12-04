@@ -66,7 +66,10 @@ class WebSearchTool:
             "max_results": max_results, "include_answer": include_answer
         }
         try:
-            with httpx.Client(timeout=30) as client:
+            # Tavily 需要代理 (如果配置了 PROXY_URL)
+            # 使用 trust_env=False 防止读取系统环境变量导致混乱，显式指定 proxy
+            proxies = PROXY_URL if PROXY_URL else None
+            with httpx.Client(timeout=30, proxy=proxies) as client:
                 resp = client.post(url, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
@@ -309,7 +312,9 @@ def main():
     
     search_tool = WebSearchTool()
     
-    with httpx.Client(proxy=PROXY_URL, timeout=REQUEST_TIMEOUT) as http_client:
+    # DeepSeek 建议直连，不走代理 (除非 api.deepseek.com 被墙)
+    # 这里我们将 proxy 设为 None，确保它不走 PROXY_URL
+    with httpx.Client(proxy=None, timeout=REQUEST_TIMEOUT) as http_client:
         client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL, http_client=http_client)
         
         # 1. 广域扫描 (Watchlist + Trend + Pain)
