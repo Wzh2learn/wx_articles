@@ -17,7 +17,8 @@ from bs4 import BeautifulSoup
 from openai import OpenAI
 from config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, PROXY_URL, REQUEST_TIMEOUT,
-    TAVILY_API_KEY, get_topic_report_file, get_today_dir
+    TAVILY_API_KEY, get_topic_report_file, get_today_dir,
+    get_stage_dir, get_research_notes_file
 )
 
 # ================= 配置区 =================
@@ -295,23 +296,14 @@ EDITOR_PROMPT = """
 * **获得感**：[用户看完能得到什么？省钱？省时？]
 * **心理锚点**：[利用了什么心理？贪便宜？怕落后？]
 * **核心看点**：[文章大纲，包含具体的工具/技巧]
----
-## 今日主推
-告诉我不写会后悔的那个 (获得感最强的)。
-"""
 
-def save_report(raw_data, analysis):
-    filename = get_topic_report_file()
-    content = f"# 🚀 选题雷达报告 v7.0 ({CURRENT_CONFIG['name']})\n\n**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n**策略**: {CURRENT_CONFIG['strategy']}\n\n## 深度验证情报\n{raw_data}\n\n## 选题分析\n{analysis}"
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(content)
-    print(f"\n\n📁 报告已保存: {filename}")
+from config import (
+    DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, PROXY_URL, REQUEST_TIMEOUT,
+    TAVILY_API_KEY, get_topic_report_file, get_today_dir, 
+    get_stage_dir, get_research_notes_file
+)
 
-def main():
-    print("\n" + "="*60 + "\n🚀 全网选题雷达 v7.0 (价值挖掘版) - 王往AI\n" + "="*60 + "\n")
-    
-    search_tool = WebSearchTool()
-    
+# ... (省略中间代码) ...
     # DeepSeek 建议直连，不走代理 (除非 api.deepseek.com 被墙)
     # 这里我们将 proxy 设为 None，确保它不走 PROXY_URL
     with httpx.Client(proxy=None, timeout=REQUEST_TIMEOUT) as http_client:
