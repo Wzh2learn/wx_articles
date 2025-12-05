@@ -18,21 +18,74 @@ from openai import OpenAI
 from config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, PROXY_URL, REQUEST_TIMEOUT,
     TAVILY_API_KEY, get_topic_report_file, get_today_dir,
-    get_stage_dir, get_research_notes_file
+    get_stage_dir, get_research_notes_file, get_history_file
 )
+
+# ================= 历史记录管理 =================
+
+def load_history():
+    """加载最近 7 天的历史选题"""
+    history_file = get_history_file()
+    if not os.path.exists(history_file):
+        return []
+    
+    try:
+        with open(history_file, "r", encoding="utf-8") as f:
+            history = json.load(f)
+            
+        # 过滤出最近 7 天的
+        recent_history = []
+        today = datetime.now()
+        for item in history:
+            date_str = item.get("date")
+            try:
+                item_date = datetime.strptime(date_str, "%Y-%m-%d")
+                if (today - item_date).days <= 7:
+                    recent_history.append(item)
+            except:
+                continue
+        return recent_history
+    except Exception:
+        return []
+
+def save_topic_to_history(topic, angle):
+    """保存选中选题到历史记录"""
+    history_file = get_history_file()
+    history = []
+    if os.path.exists(history_file):
+        try:
+            with open(history_file, "r", encoding="utf-8") as f:
+                history = json.load(f)
+        except:
+            pass
+            
+    new_entry = {
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "topic": topic,
+        "angle": angle
+    }
+    history.append(new_entry)
+    
+    # 只保留最近 30 条
+    if len(history) > 30:
+        history = history[-30:]
+        
+    with open(history_file, "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=2)
+    print(f"   💾 历史记录已更新: {topic}")
 
 # ================= 配置区 =================
 
 # 长期关注矩阵 (流量基本盘)
 WATCHLIST = [
-    # 顶流模型
-    "DeepSeek", "Kimi", "通义千问", "GPT-4o", "Gemini", "Grok",
+    # 顶流模型 (更新为最新代号)
+    "DeepSeek V3", "Claude 3.5", "Gemini 2.0", "GPT-4o", "Llama 3",
+    # 热门落地场景 (技术概念)
+    "MCP协议", "AI Agent", "RAG", "AI 编程", "AI 视频生成",
     # 编程神器
-    "Cursor", "Windsurf", "Claude Code", "GitHub Copilot",
-    # 效率应用
-    "夸克AI", "豆包", "秘塔搜索", "腾讯元宝",
-    # 通用类目
-    "AI教程", "AI副业", "效率神器"
+    "Cursor", "Windsurf", "Bolt.new", "Lovable",
+    # 效率/搜索
+    "Kimi", "秘塔搜索", "Perplexity"
 ]
 
 # 运营阶段配置
@@ -41,9 +94,9 @@ OPERATIONAL_PHASE = "VALUE_HACKER" # 价值黑客
 PHASE_CONFIG = {
     "VALUE_HACKER": {
         "name": "价值黑客模式",
-        "weights": {"news": 0.5, "social": 2.5, "github": 1.0}, # 极度重社交和痛点
+        "weights": {"news": 1.5, "social": 2.0, "github": 1.0}, # 平衡权重：提升新闻权重，确保不漏大事件
         "strategy": "利用心理学锚点(收益/损失)，挖掘能给用户带来'获得感'的选题。",
-        "prompt_suffix": "⚠️ 绝对原则：像一个'生活黑客'一样思考。剔除所有'新闻报道'，只保留'解决方案'。如果是工具，必须是普通人手机/电脑能装的；如果是教程，必须是小白能看懂的。"
+        "prompt_suffix": "⚠️ 绝对原则：像一个'生活黑客'一样思考。但必须对'重大技术更新'保持敏感（如新模型发布）。如果是工具，必须是普通人手机/电脑能装的；如果是教程，必须是小白能看懂的。"
     }
 }
 
@@ -58,14 +111,22 @@ class WebSearchTool:
         if self.enabled:
             print("   ✅ Tavily Search API 已启用")
     
-    def search(self, query, max_results=5, include_answer=False):
+    def search(self, query, max_results=5, include_answer=False, topic=None, days=3):
+        """Tavily 搜索，强制只返回最近 N 天的新闻"""
         if not self.enabled: return []
-        print(f"   🔍 Tavily: {query}")
+        print(f"   🔍 Tavily (最近{days}天): {query}")
         url = "https://api.tavily.com/search"
         payload = {
-            "api_key": self.api_key, "query": query, "search_depth": "basic",
-            "max_results": max_results, "include_answer": include_answer
+            "api_key": self.api_key,
+            "query": query,
+            "search_depth": "advanced",  # 使用 advanced 以支持时间过滤
+            "max_results": max_results,
+            "include_answer": include_answer,
+            "days": days                  # 只看最近 N 天的热点
         }
+        if topic:
+            payload["topic"] = topic
+            
         try:
             # Tavily 需要代理 (如果配置了 PROXY_URL)
             # 使用 trust_env=False 防止读取系统环境变量导致混乱，显式指定 proxy
@@ -111,11 +172,50 @@ def get_github_trending():
     except Exception as e:
         return [f"- GitHub 抓取失败: {e}"]
 
+def extract_hot_entities(client, search_results):
+    """从搜索结果中提取 2-3 个热门技术名词"""
+    if not search_results: return []
+    
+    text = "\n".join([f"- {r['title']}" for r in search_results[:10]]) # 限制输入长度
+    prompt = """
+    请从上述新闻标题中，提取 2-3 个当前最火的 AI 技术或产品名称。
+    要求：
+    1. 只返回具体名词，如 "DeepSeek V3", "MCP", "Sora 2.0"。
+    2. 不要返回通用词（如 "AI", "LLM", "Technology"）。
+    3. 输出格式：用英文逗号分隔，不要其他废话。
+    """
+    try:
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "你是一个敏锐的技术趋势捕手。"},
+                {"role": "user", "content": f"【新闻标题列表】\n{text}\n\n{prompt}"}
+            ],
+            temperature=0.1
+        )
+        content = response.choices[0].message.content.strip()
+        # 简单清理
+        entities = [e.strip() for e in content.split(',') if e.strip() and len(e.strip()) < 20]
+        return entities[:3]
+    except Exception as e:
+        print(f"      ⚠️ 热点提取失败: {e}")
+        return []
+
 # ================= 核心逻辑 =================
 
-PLAN_PROMPT = """
-你是"王往AI"的首席内容策略官。
-请基于【全网情报】和【心理学策略】，挖掘 3 个最具"爆款潜质"的选题方向。
+def get_plan_prompt(history_text=""):
+    """动态生成规划提示词，注入当前日期和历史记录"""
+    today = datetime.now().strftime('%Y-%m-%d')
+    return f"""
+📅 今天是 {today}。你必须只关注最近 3-7 天内发生的 AI 圈最新大事件。
+❗ 绝对禁止报道 2024 年或更早的旧闻（如 DeepSeek R1、GPT-4 发布等历史事件）。
+
+【历史发文记录 (最近7天)】
+{history_text}
+⚠️ 查重指令：如果上述历史记录中已存在相似选题，请必须调整切入角度（例如：从"新闻报道"转向"深度实测"或"避坑指南"）。如果无法差异化，请直接丢弃该选题。
+
+你是“王往AI”的首席内容策略官。
+请基于【全网情报】和【心理学策略】，挖掘 3 个最具“爆款潜质”的选题方向。
 
 心理学策略：
 1. **A路 (锚点效应)**: 借势顶流 (DeepSeek/Kimi)，关注其"隐藏功能"或"最新玩法"。
@@ -133,36 +233,73 @@ PLAN_PROMPT = """
 
 输出格式（严格 JSON）：
 [
-    {
+    {{
         "event": "选题核心词 (如: DeepSeek)",
         "angle": "切入角度 (如: 隐藏玩法 / 避坑指南)",
         "news_query": "功能性搜索词 (如: DeepSeek V3 file upload)",
         "social_query": "情绪性搜索词 (如: DeepSeek 报错 / DeepSeek 不好用)"
-    },
+    }},
     ...
 ]
 """
 
+# 保留历史兼容性
+PLAN_PROMPT = get_plan_prompt()
+
 def step1_broad_scan_and_plan(client, search_tool):
-    """Step 1: 广域价值扫描 (心理学三路策略)"""
+    """Step 1: 广域价值扫描 (心理学三路策略 + 全网雷达)"""
     print(f"\n📡 [Step 1] 广域价值扫描 (策略: {CURRENT_CONFIG['name']})...")
     
     pre_scan_results = []
     
-    # === A路: 顶流锚点 (Watchlist) ===
-    # 随机选 3 个顶流，搜"玩法"
-    targets = random.sample(WATCHLIST, 3)
-    print(f"   🎯 [A路-锚点] 扫描顶流: {targets}")
-    for t in targets:
-        res = search_tool.search(f"{t} 隐藏功能 玩法 教程 2025", max_results=2)
+    # === Phase 0: 全网雷达 (Global Radar) ===
+    # 破除信息茧房，主动嗅探不在 WATCHLIST 里的新黑马
+    print(f"   🌑 [Phase 0] 全网雷达扫描 (发现新物种)...")
+    radar_queries = [
+        "site:reddit.com/r/LocalLLaMA AI news today", # 硬核社区
+        "site:news.ycombinator.com AI launch",        # 硅谷风向标
+        "site:huggingface.co/papers trending",        # 学术前沿
+        "AI technology breaking news today"           # 大众新闻
+    ]
+    for q in radar_queries:
+        res = search_tool.search(q, max_results=2, topic="news", days=1) # 只看24小时内
         pre_scan_results.extend(res)
+
+    # === Phase 0.5: 热点提取 ===
+    hot_entities = extract_hot_entities(client, pre_scan_results)
+    if hot_entities:
+        print(f"   🔥 [雷达锁定] 突发热点: {hot_entities}")
+
+    # === A路: 顶流锚点 (Watchlist + Hotspots) ===
+    # 随机选 3 个顶流
+    targets = random.sample(WATCHLIST, 3)
+    
+    # 将热点加入 targets (优先侦察)
+    for h in hot_entities:
+        # 简单去重：如果 target 里没有类似的字符串
+        if not any(h.lower() in t.lower() for t in targets):
+            targets.insert(0, h)
+            
+    # 限制扫描数量，避免过载
+    targets = targets[:6]
+
+    print(f"   🎯 [A路-锚点] 扫描目标: {targets}")
+    for t in targets:
+        # 激活僵尸关键词：同时搜"隐藏功能"和"最新更新"
+        queries = [
+            f"{t} 隐藏功能 玩法 教程 2025",
+            f"{t} new features latest update" # 英文搜更新往往更准
+        ]
+        for q in queries:
+            res = search_tool.search(q, max_results=1, topic="news", days=3)
+            pre_scan_results.extend(res)
         
     # === B路: 即时满足 (Life Hack) ===
     # 搜"神器"、"黑科技"
     print(f"   ⚡ [B路-收益] 扫描效率神器...")
     queries = ["本周 AI 效率神器 推荐", "AI 自动化办公 教程", "Notion AI 替代品"]
     for q in queries:
-        res = search_tool.search(q, max_results=2)
+        res = search_tool.search(q, max_results=2, days=3)
         pre_scan_results.extend(res)
         
     # === C路: 损失厌恶 (Pain Points) ===
@@ -170,18 +307,24 @@ def step1_broad_scan_and_plan(client, search_tool):
     print(f"   🛡️ [C路-损失] 扫描避坑/吐槽...")
     queries = ["AI工具 智商税 避坑", "AI眼镜 翻车", "AI 写作 查重"]
     for q in queries:
-        res = search_tool.search(q, max_results=2)
+        res = search_tool.search(q, max_results=2, days=3)
         pre_scan_results.extend(res)
     
     pre_scan_text = "\n".join([f"- {r['title']}: {r['body'][:80]}" for r in pre_scan_results])
     
     # 2. 智能筛选与规划
     print(f"   📝 情报聚合完毕，DeepSeek 正在应用心理学策略选题...")
+    
+    # 加载历史记录
+    history = load_history()
+    history_text = "\n".join([f"- {h['date']}: {h['topic']} ({h['angle']})" for h in history])
+    if not history_text: history_text = "无（这是第一篇）"
+
     try:
         response = client.chat.completions.create(
             model="deepseek-chat",
             messages=[
-                {"role": "system", "content": PLAN_PROMPT},
+                {"role": "system", "content": get_plan_prompt(history_text)},
                 {"role": "user", "content": f"【混合情报池】\n{pre_scan_text}"}
             ],
             temperature=0.7,
@@ -466,10 +609,47 @@ def final_summary():
             
             # 保存综合报告
             final_report = os.path.join(topics_dir, "FINAL_DECISION.md")
+            content_str = ''.join(collected)
             with open(final_report, "w", encoding="utf-8") as f:
-                f.write(f"# 🏆 今日最终选题决策\n\n**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n**综合报告数**: {len(reports)}\n\n{''.join(collected)}")
+                f.write(f"# 🏆 今日最终选题决策\n\n**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n**综合报告数**: {len(reports)}\n\n{content_str}")
             
             print(f"\n\n📁 综合报告已保存: {final_report}")
+
+            # === 自动更新历史记录 (Memory Update) ===
+            try:
+                import re
+                # 优化正则：兼容中英文冒号、忽略前后空格、多行匹配
+                # 模式1: **标题**: xxx
+                title_pattern1 = r'\*\*标题\*\*\s*[:：]\s*(.+)'
+                # 模式2: ### 选题 1：xxx
+                title_pattern2 = r'###\s*选题\s*\d+\s*[:：]\s*(.+)'
+                
+                final_topic = None
+                
+                # 尝试匹配
+                match1 = re.search(title_pattern1, content_str)
+                if match1:
+                    final_topic = match1.group(1).strip()
+                else:
+                    match2 = re.search(title_pattern2, content_str)
+                    if match2:
+                        final_topic = match2.group(1).strip()
+                
+                if final_topic:
+                    save_topic_to_history(final_topic, "综合决策")
+                else:
+                    # Fallback: 尝试提取第一行有效文本
+                    lines = [l.strip() for l in content_str.split('\n') if l.strip() and not l.startswith('#')]
+                    if lines:
+                        fallback_title = lines[0][:50]  # 取前50字符
+                        save_topic_to_history(fallback_title, "综合决策")
+                        print(f"⚠️ 使用 Fallback 标题: {fallback_title}")
+                    else:
+                        print("⚠️ 警告: 无法从报告中提取最终选题标题，历史记录未更新。")
+                        print(f"   调试信息: 内容前200字 -> {content_str[:200].replace(chr(10), ' ')}")
+            
+            except Exception as e:
+                 print(f"⚠️ 历史记录更新失败: {e}")
             
         except Exception as e:
             print(f"❌ 综合分析失败: {e}")

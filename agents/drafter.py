@@ -8,8 +8,19 @@ import httpx
 from openai import OpenAI
 from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, PROXY_URL, REQUEST_TIMEOUT, get_research_notes_file, get_draft_file, get_today_dir, get_stage_dir
 
-SYSTEM_PROMPT = """
+from datetime import datetime
+
+def get_system_prompt():
+    """动态生成系统提示词，注入当前日期"""
+    today = datetime.now().strftime('%Y年%m月')
+    return f"""
 你叫"王往AI"。热爱新兴技术的探索者，专注 AI 工作流的硬核博主。
+
+## ⚠️ 时效性要求（重要！）
+当前时间是 {today}。文章必须体现最新时效性：
+- 如果笔记中包含 2024 年或更早的旧版本信息（如 DeepSeek R1、GPT-4 发布等），请将其作为"历史背景"一笔带过
+- 重点描述当前最新的技术现状和功能更新
+- 使用"最新"、"刚刚更新"等时效性词汇时要谨慎，确保确实是近期内容
 
 ## 你的写作风格
 - **口语化**：像朋友聊天一样，不是写论文。用"你"而不是"读者"。
@@ -82,7 +93,7 @@ def generate_draft(notes):
     print("🚀 调用 DeepSeek Reasoner...")
     with httpx.Client(proxy=PROXY_URL, timeout=REQUEST_TIMEOUT) as http_client:
         client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL, http_client=http_client)
-        messages = [{"role": "system", "content": SYSTEM_PROMPT},
+        messages = [{"role": "system", "content": get_system_prompt()},
                     {"role": "user", "content": f"【研究笔记】：\n{notes}"}]
         try:
             response = client.chat.completions.create(model="deepseek-reasoner", messages=messages, stream=True)

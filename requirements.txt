@@ -5,6 +5,11 @@ duckduckgo-search>=6.0.0
 beautifulsoup4>=4.12.0
 httpx>=0.27.0
 
+# === 研究智能体 (researcher.py) ===
+# Exa AI (原 Metaphor) - 通过 httpx 直接调用 API，无需额外包
+# Tavily (备用)
+tavily-python>=0.3.0
+
 # === 写作智能体 (drafter.py) ===
 openai>=1.0.0
 

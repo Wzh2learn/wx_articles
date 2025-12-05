@@ -2,11 +2,12 @@
 
 一套完整的 AI 驱动的微信公众号内容生产工作流，从选题到发布**全流程自动化**。
 
-## ✨ 功能特性
+## ✨ 功能特性 (v3.0)
 
 | 模块 | 功能 | 技术栈 |
 |------|------|--------|
-| 🎯 **选题雷达** | 全网扫描热点，AI动态生成搜索词，智能推荐选题 | DeepSeek + Tavily API |
+| 🎯 **选题雷达** | 全网扫描热点 (HN/Reddit/GitHub)，动态热词提取，记忆系统避免重复 | DeepSeek + Tavily |
+| 🔬 **自动研究** | **新功能** Exa AI 智能搜索 + 全文获取，强制锁定最近 30 天资讯 | Exa AI + Jina Reader |
 | ✍️ **写作智能体** | 读取研究笔记，生成符合人设的初稿 | DeepSeek Reasoner |
 | 📋 **TODO提取器** | 列出草稿中需要补充的截图和内容 | Python Regex |
 | 🎨 **排版智能体** | Markdown 转 HTML，壹伴风格，一键复制 | Pygments + Premailer |
@@ -121,27 +122,29 @@ set WECHAT_APP_SECRET=your-app-secret
 
 ```bash
 # 查看帮助
-python run.py
 python run.py help
 
-# 运行选题雷达 (可多次运行)
+# 🎯 选题雷达 (可多次运行)
 python run.py hunt
 
-# 综合多次报告，输出最终选题 + 3个提示词
+# 🏆 综合决策，输出最终选题 + 3个提示词
 python run.py final
 
-# 运行写作智能体
+# 🔬 自动研究 (新功能! Exa AI 智能搜索 + 全文获取)
+python run.py research
+
+# ✍️ 写作智能体
 python run.py draft
 
-# 指定日期 (处理历史素材)
-python run.py draft -d 1204        # MMDD 简写
-python run.py final -d 2025-12-04  # 完整格式
-
-# 运行排版智能体
+# 🎨 排版智能体
 python run.py format
 
-# 自动发布到微信草稿箱
+# 📤 自动发布到微信草稿箱
 python run.py publish
+
+# 指定日期 (处理历史素材)
+python run.py research -d 1204     # MMDD 简写
+python run.py draft -d 2025-12-04  # 完整格式
 ```
 
 ### 完整工作流
@@ -150,10 +153,10 @@ python run.py publish
 graph TD
     A[hunt ×N 早/中/晚] -->|多次扫描| B(report_xxxx.md × N)
     B -->|python run.py final| C[FINAL_DECISION.md + 3个提示词]
-    C -->|提示词1: Fast Research| D[NotebookLM 搜索素材]
-    D -->|整理| E(research_notes.txt)
+    C -->|python run.py research| D[🔬 Exa AI 自动搜索素材]
+    D -->|自动生成| E(notes.txt)
     E -->|python run.py draft| F(draft.md)
-    F -->|人工补图润色 + 提示词3: 配图| G(final.md)
+    F -->|人工补图润色| G(final.md)
     G -->|python run.py format| H(output.html)
     H -->|方式A: 手动| I[浏览器复制粘贴]
     H -->|方式B: 自动| J[python run.py publish]
@@ -191,12 +194,18 @@ python run.py final -d 1204   # 处理指定日期的报告
     - 🎨 **提示词3: 视觉脚本** → 点击 Studio → **Infographic** 生成信息图
 - 输出文件：`data/archive/YYYY-MM-DD/1_topics/FINAL_DECISION.md`
 
-#### Step 2: 研究 📚
+#### Step 2: 自动研究 🔬
 
-1. 复制 **提示词1: Fast Research**，在 [NotebookLM](https://notebooklm.google.com/) 中搜索相关资料
-2. 导入搜索到的网页/PDF 作为 Source
-3. 复制 **提示词2: 草稿大纲**，让 NotebookLM 生成深度笔记
-4. 将笔记粘贴到 `data/archive/YYYY-MM-DD/2_research/notes.txt`
+```bash
+python run.py research            # 处理今天的选题
+python run.py research -d 1204    # 处理指定日期的选题
+```
+
+**v3.0 自动化研究** (替代 NotebookLM)：
+- 🚀 **Exa AI 智能搜索**：自动搜索微信/知乎/微博/小红书/V2EX/掘金等社媒
+- 📄 **全文获取**：Exa 直接返回清洗后的文章内容，无需第三方爬虫
+- 📝 **AI 整理笔记**：DeepSeek 自动提取核心观点、案例、避坑指南
+- 输出：`data/archive/YYYY-MM-DD/2_research/notes.txt`
 
 #### Step 3: 写初稿 ✍️
 
@@ -325,7 +334,8 @@ python run.py publish -d 1204
 ```python
 # === API 配置 ===
 DEEPSEEK_API_KEY = "sk-your-key"  # 或 os.getenv("DEEPSEEK_API_KEY")
-TAVILY_API_KEY = "tvly-your-key"  # 或 os.getenv("TAVILY_API_KEY")
+EXA_API_KEY = "xxx"               # Exa AI: https://dashboard.exa.ai/
+TAVILY_API_KEY = "tvly-your-key"  # 备用: https://tavily.com
 
 # === 微信公众号配置 ===
 WECHAT_APP_ID = "wx1234..."       # 或 os.getenv("WECHAT_APP_ID")
@@ -344,7 +354,9 @@ PERSONA_TAGS = ["AI", "DeepSeek", "效率", "工具", ...]
 Python 3.9+
 
 # 选题雷达
-httpx, beautifulsoup4 (Tavily API 无需额外依赖)
+httpx, beautifulsoup4, tavily-python
+
+# 研究智能体 (Exa AI 通过 httpx 调用，无额外依赖)
 
 # 写作智能体
 openai

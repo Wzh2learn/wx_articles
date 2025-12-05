@@ -24,8 +24,11 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 # ================= 搜索配置 =================
 
-# Tavily Search API (推荐: https://tavily.com)
-# 留空则搜索功能受限
+# Exa AI (原 Metaphor) API Key
+# https://dashboard.exa.ai/api-keys
+EXA_API_KEY = os.getenv("EXA_API_KEY") or ""
+
+# Tavily Search API (备用: https://tavily.com)
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY") or ""
 
 # ================= 网络配置 =================
@@ -55,6 +58,24 @@ ARCHIVE_DIR = os.path.join(DATA_DIR, "archive")
 
 # ================= 日期目录管理 =================
 
+# 工作日期（默认今天，可通过 set_working_date() 指定）
+WORKING_DATE = None
+
+def set_working_date(date_str):
+    """设置工作日期，格式: YYYY-MM-DD 或 MMDD"""
+    global WORKING_DATE
+    if date_str:
+        # 支持 MMDD 简写格式
+        if len(date_str) == 4 and date_str.isdigit():
+            year = datetime.now().year
+            date_str = f"{year}-{date_str[:2]}-{date_str[2:]}"
+        WORKING_DATE = date_str
+        print(f"📅 工作日期已设置为: {WORKING_DATE}")
+
+def get_working_date():
+    """获取当前工作日期"""
+    return WORKING_DATE or datetime.now().strftime("%Y-%m-%d")
+
 # 工作流阶段目录（数字前缀保证排序）
 STAGE_DIRS = {
     "topics": "1_topics",      # 选题报告
@@ -65,11 +86,11 @@ STAGE_DIRS = {
 }
 
 def get_today_dir():
-    """获取今天的归档目录，如果不存在则创建"""
-    today = datetime.now().strftime("%Y-%m-%d")
-    today_dir = os.path.join(ARCHIVE_DIR, today)
-    os.makedirs(today_dir, exist_ok=True)
-    return today_dir
+    """获取工作日期的归档目录，如果不存在则创建"""
+    date_str = get_working_date()
+    date_dir = os.path.join(ARCHIVE_DIR, date_str)
+    os.makedirs(date_dir, exist_ok=True)
+    return date_dir
 
 def get_stage_dir(stage):
     """获取今天某个阶段的目录"""
@@ -102,6 +123,10 @@ def get_draft_file():
 def get_todo_file():
     """TODO 清单"""
     return get_today_file("todo_list.txt", "drafts")
+
+def get_history_file():
+    """历史选题记录"""
+    return os.path.join(DATA_DIR, "history.json")
 
 def get_final_file():
     """定稿"""
