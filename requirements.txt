@@ -20,8 +20,7 @@ premailer>=3.10.0
 pyperclip>=1.8.0
 lxml>=5.0.0
 
-# === 发布智能体 (publisher.py) ===
-wechatpy>=1.8.0
+# === 基础工具 ===
 requests>=2.25.0
 
 # === 安装命令 ===
