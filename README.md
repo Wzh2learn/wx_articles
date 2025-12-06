@@ -9,39 +9,11 @@
 | 🎯 **选题雷达** | 全网扫描热点 (HN/Reddit/GitHub)，动态热词提取，记忆系统避免重复 | DeepSeek + Tavily |
 | 🔬 **自动研究** | **新功能** Exa AI 智能搜索 + 全文获取，强制锁定最近 30 天资讯 | Exa AI + Jina Reader |
 | ✍️ **写作智能体** | 读取研究笔记，生成符合人设的初稿 | DeepSeek Reasoner |
-| 📋 **TODO提取器** | 列出草稿中需要补充的截图和内容 | Python Regex |
-| 🎨 **排版智能体** | Markdown 转 HTML，壹伴风格，一键复制 | Pygments + Premailer |
-| 📤 **发布智能体** | 自动上传图片，一键创建草稿 | wechatpy + 微信API |
 
-## 📁 项目结构
+## 🚀 快速开始
 
-```text
-wx_articles/
-├── README.md                # 项目说明
-├── requirements.txt         # Python 依赖
-├── config.py.example       # 配置模板
-├── config.py               # 你的配置（已被 gitignore）
-├── run.py                  # 统一入口脚本
-├── agents/                 # 智能体模块
-│   ├── __init__.py
-│   ├── trend_hunter.py     # 🎯 选题雷达
-│   ├── drafter.py          # ✍️ 写作智能体
-│   ├── todo_extractor.py   # 📋 TODO 提取器
-│   ├── formatter.py        # 🎨 排版智能体
-│   └── publisher.py        # 📤 发布智能体
-└── data/archive/           # 按日期 + 阶段归档
-        └── 2025-12-04/
-            ├── 1_topics/       # 选题报告
-            │   ├── report_xxxx.md     # 单次扫描报告
-            │   └── FINAL_DECISION.md  # 综合决策 + 3个提示词
-            ├── 2_research/     # 研究素材 ← 在这里编辑
-            │   └── notes.txt          # 从 NotebookLM 整理的笔记
-            ├── 3_drafts/       # AI 初稿
-            │   ├── draft.md           # AI 生成的初稿
-            │   └── todo_list.txt      # 待补充清单
-            ├── 4_publish/      # 待发布文件
-            │   ├── final.md           # 你润色后的定稿
-            │   └── output.html        # 格式化后的 HTML
+### 1. 启动全自动流程
+最简单的方式是一键运行完整流程：
             └── 5_assets/       # 配图素材
                 └── (截图、信息图等)   # publish 时会上传到微信
 ```

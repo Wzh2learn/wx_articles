@@ -202,6 +202,14 @@ def highlight_code(code, lang):
     return f'<pre><code class="language-{lang}">{highlight(code, lexer, formatter)}</code></pre>'
 
 def convert_md_to_html(md_content):
+    # 移除所有图片语法，替换为占位符，方便人工插图
+    def replace_img(match):
+        alt = match.group(1)
+        return f'<div style="background:#f0f0f0; border:2px dashed #ccc; padding:20px; text-align:center; color:#666; margin:20px 0;">🖼️ 请在此处插入图片：{alt}</div>'
+    
+    # 匹配 ![]()
+    md_content = re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', replace_img, md_content)
+    
     md = MarkdownIt('commonmark', {'html': True, 'typographer': True})
     md.enable('table').enable('strikethrough')
     html = md.render(md_content)
@@ -231,6 +239,7 @@ def inline_css(html):
     <div style="margin-top: 40px; padding: 20px; background: #e8f5e9; border-radius: 8px; text-align: center;">
         <p style="color: #2e7d32; font-weight: bold; margin: 0;">📋 复制方法：</p>
         <p style="color: #555; margin: 10px 0 0 0;">全选上方内容 (Ctrl+A) → 复制 (Ctrl+C) → 粘贴到公众号<strong>普通编辑模式</strong></p>
+        <p style="color: #999; margin: 10px 0 0 0; font-size: 13px;">⚠️ 图片需在公众号后台手动上传替换占位符</p>
     </div>
 </body>
 </html>"""
@@ -281,7 +290,7 @@ def main():
     print("   2. 在页面上 Ctrl+A 全选内容")
     print("   3. Ctrl+C 复制")
     print("   4. 到公众号【普通编辑模式】Ctrl+V 粘贴")
-    print("   ⚠️  不要用 HTML 模式！直接粘贴富文本！")
+    print("   5. ⚠️ 遇到虚线框占位符时，请手动上传并插入对应图片！")
     print("="*60)
 
 if __name__ == "__main__":

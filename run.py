@@ -7,6 +7,7 @@
     python run.py final             # 综合多次选题报告
     python run.py research          # 运行研究智能体 (自动搜索+爬取+整理)
     python run.py draft             # 运行写作智能体
+    python run.py refine "指令"     # 运行润色智能体 (定向修改)
     python run.py format            # 运行排版智能体
     python run.py draft -d 1204     # 指定日期 (MMDD 或 YYYY-MM-DD)
 ===============================================================================
@@ -35,6 +36,7 @@ def print_help():
 ║    final   - 🏆 综合决策 (整合多次报告，输出3个提示词)       ║
 ║    research- 🔬 研究智能体 (自动搜索、爬取、整理笔记)        ║
 ║    draft   - ✍️ 写作智能体 (读取笔记，生成初稿)              ║
+║    refine  - ✨ 润色智能体 (定向修改: refine "指令")        ║
 ║    format  - 🎨 排版智能体 (转换HTML，复制到剪贴板)          ║
 ║    todo    - 📋 提取TODO (列出草稿中需补充的内容)            ║
 ║    publish - 📤 自动发布 (上传图片 & 新建草稿)               ║
@@ -46,7 +48,7 @@ def print_help():
 ║    2. final   -> 综合所有报告，获得最终选题                  ║
 ║    3. research-> 🆕 自动联网搜索+笔记整理 (替代NotebookLM)   ║
 ║    4. draft   -> 生成 draft.md                               ║
-║    5. 人工    -> 润色，截图，保存为 final.md                 ║
+║    5. refine  -> 🆕 AI定向润色 (refine "把开头改得悬念")    ║
 ║    6. format  -> 生成 HTML，复制到公众号发布                 ║
 ╚══════════════════════════════════════════════════════════════╝
 """)
@@ -158,8 +160,7 @@ def run_all():
     print("="*60)
     print("请完成以下步骤后，按 Enter 继续：")
     print(f"  1. 打开 {today}/3_drafts/draft.md 进行润色")
-    print(f"  2. 截图保存到 {today}/5_assets/ 目录")
-    print(f"  3. 保存定稿到 {today}/4_publish/final.md")
+    print(f"  2. 保存定稿到 {today}/4_publish/final.md")
     input("\n按 Enter 继续...")
     
     # ============ Phase 5: 排版智能体 ============
@@ -171,11 +172,50 @@ def run_all():
     print("\n" + "="*60)
     print("🎉 工作流完成！")
     print("="*60)
-    print("HTML 已复制到剪贴板，去公众号后台发布吧！")
+    print("HTML 已复制到剪贴板，请去公众号后台：")
+    print("1. 粘贴内容")
+    print("2. 手动上传并插入图片")
+
+def run_refiner(instruction: str, date: str = None):
+    """运行润色智能体"""
+    from agents.refiner import refine_article
+    refine_article(instruction, date)
+
 
 def main():
+    # 特殊处理 refine 命令（因为它需要接收额外的指令参数）
+    if len(sys.argv) >= 2 and sys.argv[1] == 'refine':
+        # 解析日期参数
+        date = None
+        instruction_parts = []
+        i = 2
+        while i < len(sys.argv):
+            if sys.argv[i] in ['-d', '--date'] and i + 1 < len(sys.argv):
+                date = sys.argv[i + 1]
+                i += 2
+            else:
+                instruction_parts.append(sys.argv[i])
+                i += 1
+        
+        # 设置工作日期
+        if date:
+            from config import set_working_date
+            set_working_date(date)
+        
+        # 获取指令
+        instruction = " ".join(instruction_parts)
+        if not instruction:
+            instruction = input("请输入修改意见: ").strip()
+        
+        if instruction:
+            run_refiner(instruction, date)
+        else:
+            print("❌ 请提供修改指令")
+            print("   用法: python run.py refine \"把开头改得更有悬念\"")
+        return
+    
     parser = argparse.ArgumentParser(description='王往AI 公众号工作流')
-    parser.add_argument('command', choices=['hunt', 'final', 'research', 'draft', 'format', 'todo', 'publish', 'all', 'help'], help='执行的命令', nargs='?', default='help')
+    parser.add_argument('command', choices=['hunt', 'final', 'research', 'draft', 'refine', 'format', 'todo', 'all', 'help'], help='执行的命令', nargs='?', default='help')
     parser.add_argument('-d', '--date', help='指定工作日期 (MMDD 或 YYYY-MM-DD)，默认今天')
     args = parser.parse_args()
     
@@ -197,11 +237,15 @@ def main():
         run_formatter()
     elif args.command == 'todo':
         run_todo()
-    elif args.command == 'publish':
-        from agents.publisher import publish_draft
-        publish_draft()
     elif args.command == 'all':
         run_all()
+    elif args.command == 'refine':
+        # 如果通过 argparse 进入（无参数），交互式获取
+        instruction = input("请输入修改意见: ").strip()
+        if instruction:
+            run_refiner(instruction, args.date)
+        else:
+            print("❌ 请提供修改指令")
     else:
         print_help()
 
