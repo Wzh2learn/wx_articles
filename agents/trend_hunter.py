@@ -172,6 +172,225 @@ def get_github_trending():
     except Exception as e:
         return [f"- GitHub 抓取失败: {e}"]
 
+# ================= 热榜动态抓取 =================
+
+def fetch_dynamic_trends(client, search_tool=None):
+    """
+    从热榜网站抓取实时关键词（三级容错机制）
+    1. Jina Primary -> 2. Jina Backup (RSS) -> 3. Tavily Search
+    """
+    print("   🌐 [热榜抓取] 从全网热榜获取实时趋势...")
+    
+    sources = [
+        # === 国际硬核源 ===
+        {
+            "name": "Hacker News",
+            "tag": "硬核技术",
+            "primary": "https://news.ycombinator.com",
+            "backup": "https://news.ycombinator.com/rss"
+        },
+        {
+            "name": "Product Hunt",
+            "tag": "效率工具新品",
+            "primary": "https://www.producthunt.com",
+            "backup": "https://www.producthunt.com/feed"
+        },
+        
+        # === 国内大众/实战源 ===
+        {
+            "name": "知乎热榜-科技",
+            "tag": "AI观点与争议",
+            "primary": "https://www.zhihu.com/hot/technology",
+            "backup": "https://rsshub.app/zhihu/hotlist"
+        },
+        {
+            "name": "掘金-后端/AI",
+            "tag": "程序员实战",
+            "primary": "https://juejin.cn/hot/articles",
+            "backup": "https://rsshub.app/juejin/trending/all/weekly"
+        },
+        {
+            "name": "36Kr-科技",
+            "tag": "科技大众化/行业动态",
+            "primary": "https://36kr.com/information/technology",
+            "backup": "https://36kr.com/feed"
+        },
+        {
+            "name": "微博热搜-科技",
+            "tag": "大众舆情/突发",
+            "primary": "https://s.weibo.com/top/summary?cate=scitech",
+            "backup": "https://rsshub.app/weibo/search/hot"
+        },
+        {
+            "name": "少数派",
+            "tag": "生活黑客/效率方法论",
+            "primary": "https://sspai.com/tag/%E6%95%88%E7%8E%87/hot",
+            "backup": "https://sspai.com/feed"
+        },
+        {
+            "name": "CSDN热榜",
+            "tag": "技术教程/报错解决",
+            "primary": "https://blog.csdn.net/rank/list",
+            "backup": ""  # CSDN 无稳定 RSS，留空依靠 Jina 强读
+        }
+    ]
+    
+    all_keywords = []
+    
+    for source in sources:
+        # 传入 search_tool 用于 Tavily 兜底
+        content = _fetch_with_fallback(
+            source["primary"], 
+            source["backup"], 
+            source["name"],
+            search_tool
+        )
+        if content:
+            # 对每个源单独提取关键词（带降噪 Prompt）
+            keywords = _extract_keywords_from_single_source(
+                client, 
+                content, 
+                source["name"], 
+                source["tag"]
+            )
+            all_keywords.extend(keywords)
+    
+    if not all_keywords:
+        print("      ⚠️ 所有热榜源提取关键词失败，返回空列表")
+        return []
+    
+    # 去重并限制数量
+    unique_keywords = list(dict.fromkeys(all_keywords))[:10]
+    print(f"   🔥 [热榜汇总] 实时关键词: {unique_keywords}")
+    return unique_keywords
+
+
+def _fetch_with_fallback(primary_url, backup_url, source_name, search_tool=None):
+    """
+    三级获取策略：Jina Primary -> Jina Backup -> Tavily Search
+    """
+    jina_base = "https://r.jina.ai/"
+    
+    # 1. 尝试 Jina Primary
+    content = _fetch_via_jina(jina_base + primary_url, source_name, "primary")
+    if content and len(content) >= 500:
+        return content
+    
+    # 2. 尝试 Jina Backup (RSS)
+    if backup_url:
+        print(f"      🔄 [{source_name}] Primary 失败，尝试 Backup (RSS)...")
+        content = _fetch_via_jina(jina_base + backup_url, source_name, "backup")
+        if content and len(content) >= 500:
+            return content
+
+    # 3. 尝试 Tavily 终极救援
+    if search_tool and search_tool.enabled:
+        print(f"      🛡️ [{source_name}] 启用 Tavily 终极救援...")
+        # 构造搜索词
+        query = f"{source_name} 热门 AI 科技内容 {datetime.now().strftime('%Y-%m-%d')}"
+        results = search_tool.search(query, max_results=3, days=3)
+        if results:
+            # 拼接 Tavily 的搜索结果作为伪造的"网页内容"
+            combined_text = "\n".join([f"Title: {r['title']}\nSnippet: {r['body']}" for r in results])
+            print(f"      ✅ [{source_name}] Tavily 救援成功: 抓取 {len(results)} 条结果")
+            return combined_text
+            
+    print(f"      ❌ [{source_name}] 所有通道均失败")
+    return None
+
+
+def _fetch_via_jina(url, source_name, url_type):
+    """
+    通过 Jina Reader API 获取网页内容
+    """
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "x-no-cache": "true"  # 强制 Jina Reader 抓取最新页面，不返回缓存
+        }
+        with httpx.Client(proxy=PROXY_URL, timeout=30) as client:
+            resp = client.get(url, headers=headers)
+            
+            if resp.status_code != 200:
+                print(f"      ⚠️ [{source_name}] {url_type} 状态码: {resp.status_code}")
+                return None
+            
+            content = resp.text
+            if len(content) < 500:
+                print(f"      ⚠️ [{source_name}] {url_type} 内容过短: {len(content)} 字符")
+                return None
+            
+            print(f"      ✅ [{source_name}] {url_type} 成功: {len(content)} 字符")
+            return content[:8000]  # 限制长度，避免 token 过多
+            
+    except httpx.TimeoutException:
+        print(f"      ⚠️ [{source_name}] {url_type} 超时")
+        return None
+    except Exception as e:
+        print(f"      ⚠️ [{source_name}] {url_type} 异常: {e}")
+        return None
+
+
+def _extract_keywords_from_single_source(client, content, name, tag):
+    """
+    使用 LLM 从单个热榜源中提取关键词（带严格降噪过滤）
+    """
+    if not content:
+        return []
+    
+    # 限制内容长度（保留较多内容以覆盖热榜前50名）
+    content_truncated = content[:8000]
+    
+    prompt = f"""
+这是【{name}】今天的热榜或搜索摘要。
+请从中提取 2-3 个最符合"{tag}"领域的具体技术名词或产品名称。
+
+⚠️ 关键过滤规则（必须遵守）：
+1. 🔴 **绝对排除底层技术**：严禁提取 后端框架(Spring Boot/Django)、数据库(Redis/SQL)、运维(K8s/Docker)、底层驱动(CUDA/NATS)、编程语言版本(Java 21/Vite 8)。**我们只要给小白用的工具！**
+2. 🟢 **只保留应用层**：
+   - AI 应用/大模型 (DeepSeek, Kimi, Claude 3.5, Sora)
+   - 效率工具 (Notion, Cursor, Obsidian, Arc浏览器)
+   - 落地玩法 (AI做PPT, 智能体开发, 本地部署)
+   - 行业热点 (AI眼镜, 具身智能)
+3. 排除娱乐明星和社会新闻。
+4. 如果页面是 RSS XML 格式，请忽略 XML 标签，只提取 Title 中的技术名词。
+5. 返回格式：只返回名词，用英文逗号分隔。如果不确定或无相关内容，返回 "NONE"。
+
+示例：
+❌ 错误：Spring Boot, MySQL, React Hooks
+✅ 正确：DeepSeek, Cursor, 秘塔搜索
+"""
+    
+    try:
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "你是一个敏锐的技术趋势捕手，擅长从杂乱的网页内容中提取有价值的技术关键词，并过滤掉无关的娱乐八卦。"},
+                {"role": "user", "content": f"【{name} 热榜内容】\n{content_truncated}\n\n{prompt}"}
+            ],
+            temperature=0.2
+        )
+        result = response.choices[0].message.content.strip()
+        
+        # 处理 NONE 情况
+        if result.upper() == "NONE" or "NONE" in result.upper():
+            print(f"      ⏭️ [{name}] 无相关技术内容，跳过")
+            return []
+        
+        # 清洗并返回
+        keywords = [k.strip() for k in result.split(',') if k.strip() and len(k.strip()) < 30]
+        keywords = keywords[:3]  # 每个源最多3个
+        
+        if keywords:
+            print(f"      📌 [{name}] 提取: {keywords}")
+        return keywords
+        
+    except Exception as e:
+        print(f"      ⚠️ [{name}] 关键词提取失败: {e}")
+        return []
+
+
 def extract_hot_entities(client, search_results):
     """从搜索结果中提取 2-3 个热门技术名词"""
     if not search_results: return []
@@ -270,9 +489,21 @@ def step1_broad_scan_and_plan(client, search_tool):
     if hot_entities:
         print(f"   🔥 [雷达锁定] 突发热点: {hot_entities}")
 
-    # === A路: 顶流锚点 (Watchlist + Hotspots) ===
+    # === Phase 0.6: 热榜动态趋势 ===
+    fresh_keywords = []
+    try:
+        fresh_keywords = fetch_dynamic_trends(client, search_tool)
+    except Exception as e:
+        print(f"      ⚠️ 热榜抓取异常，跳过: {e}")
+    
+    # === A路: 顶流锚点 (Watchlist + Hotspots + Fresh) ===
     # 随机选 3 个顶流
     targets = random.sample(WATCHLIST, 3)
+    
+    # 将热榜关键词加入 targets (最高优先级)
+    for fk in fresh_keywords:
+        if not any(fk.lower() in t.lower() for t in targets):
+            targets.insert(0, fk)
     
     # 将热点加入 targets (优先侦察)
     for h in hot_entities:
@@ -294,19 +525,30 @@ def step1_broad_scan_and_plan(client, search_tool):
             res = search_tool.search(q, max_results=1, topic="news", days=3)
             pre_scan_results.extend(res)
         
-    # === B路: 即时满足 (Life Hack) ===
-    # 搜"神器"、"黑科技"
+    # === B路: 随机收益场景 (Life Hack) ===
     print(f"   ⚡ [B路-收益] 扫描效率神器...")
-    queries = ["本周 AI 效率神器 推荐", "AI 自动化办公 教程", "Notion AI 替代品"]
-    for q in queries:
+    efficiency_keywords = [
+        "AI 整理很多文件", "AI 自动写周报", "AI 读长论文", "AI 做漂亮的PPT", 
+        "Excel AI 公式", "Notion 替代品", "Obsidian 插件", "浏览器 AI 插件",
+        "自动化工作流 Zapier", "AI 剪辑视频", "AI 录音转文字 免费"
+    ]
+    selected_efficiency = random.sample(efficiency_keywords, 3)
+    print(f"      🎲 随机抽取: {selected_efficiency}")
+    for kw in selected_efficiency:
+        q = f"本周 {kw} 神器 推荐 2025"
         res = search_tool.search(q, max_results=2, days=3)
         pre_scan_results.extend(res)
         
-    # === C路: 损失厌恶 (Pain Points) ===
-    # 搜"避坑"、"智商税"
+    # === C路: 随机避坑场景 (Pain Points) ===
     print(f"   🛡️ [C路-损失] 扫描避坑/吐槽...")
-    queries = ["AI工具 智商税 避坑", "AI眼镜 翻车", "AI 写作 查重"]
-    for q in queries:
+    pain_keywords = [
+        "AI 写作 查重", "AI 幻觉 翻车", "收费 AI 避坑", "AI 生成图片 丑",
+        "DeepSeek 报错", "ChatGPT 封号", "Cursor 太贵", "Copilot 不好用"
+    ]
+    selected_pain = random.sample(pain_keywords, 3)
+    print(f"      🎲 随机抽取: {selected_pain}")
+    for kw in selected_pain:
+        q = f"{kw} 解决方案 替代"
         res = search_tool.search(q, max_results=2, days=3)
         pre_scan_results.extend(res)
     
@@ -390,12 +632,19 @@ def step2_deep_scan(search_plan, search_tool):
     
     return "\n\n".join(all_results)
 
-def step3_final_decision(scan_data, client):
-    """Step 3: 决策"""
+def step3_final_decision(scan_data, client, history_text="无（这是第一篇）"):
+    """Step 3: 决策（带去重和新词扶持）"""
     print("\n" + "="*50 + "\n📝 DeepSeek 主编审核中...\n" + "="*50)
     
     prompt = f"""
     {EDITOR_PROMPT}
+    
+    ❌ **严格去重**：以下是最近已写过的选题：
+    {history_text}
+    
+    **绝对禁止**再次选择与上述极其相似的选题！必须换个工具或换个角度！
+    
+    ✨ **扶持新词**：请优先关注情报中提到的【生僻技术名词】（如 AutoGLM, Dayflow 等），如果它们有价值，优先入选。
     
     当前策略：【{CURRENT_CONFIG['name']}】
     {CURRENT_CONFIG['prompt_suffix']}
@@ -488,14 +737,19 @@ def main():
     with httpx.Client(proxy=None, timeout=REQUEST_TIMEOUT) as http_client:
         client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL, http_client=http_client)
         
+        # 加载历史记录用于去重
+        history = load_history()
+        history_text = "\n".join([f"- {h['date']}: {h['topic']} ({h['angle']})" for h in history])
+        if not history_text: history_text = "无（这是第一篇）"
+        
         # 1. 广域扫描 (Watchlist + Trend + Pain)
         search_plan = step1_broad_scan_and_plan(client, search_tool)
         
         # 2. 深度验证
         raw_data = step2_deep_scan(search_plan, search_tool)
         
-        # 3. 决策
-        analysis = step3_final_decision(raw_data, client)
+        # 3. 决策（传入历史记录用于去重）
+        analysis = step3_final_decision(raw_data, client, history_text)
         
         # 4. 保存
         save_report(raw_data, analysis)
@@ -558,20 +812,7 @@ def final_summary():
 格式要求：分条列出，每条一个明确的搜索任务]
 ```
 
-### ✍️ 提示词 2：草稿大纲 (用于生成文章框架)
-**使用方法**：复制到 NotebookLM，让它根据已导入的 Sources 来完善大纲
-```
-请根据来源内容来完善下面草稿大纲，输出完整的文章初稿：
-
-[给出一个完整的文章大纲，包括：
-- 开头 Hook (如何在3秒内抓住读者)
-- 痛点描述 (读者共鸣)
-- 解决方案 (手把手步骤)
-- 进阶技巧 (额外价值)
-- 结尾 Call to Action]
-```
-
-### 🎨 提示词 3：视觉脚本 (用于配图方案)
+### 🎨 提示词 2：视觉脚本 (用于配图方案)
 **使用方法**：复制到 NotebookLM Chat，然后点击右侧 Studio → **Infographic** 生成信息图
 ```
 [请用中文，建议需要准备的配图，包括：
@@ -581,6 +822,20 @@ def final_summary():
 - 封面图风格建议
 - 信息图要点 (适合用 Infographic 生成的数据/对比)]
 ```
+
+### 🎨 视觉配图指南 (Visual Guide)
+**说明**：请为人工配图提供详细的画面建议，帮助博主快速产出高质量素材。
+[请用中文列出不少于 3 张关键配图的建议：
+
+封面图：[画面描述，如：DeepSeek Logo 与 Excel 图标对撞，科技感，橙蓝配色]
+
+痛点图：[描述一张能展示"旧方法很麻烦"的截图或梗图]
+
+效果图：[描述一张展示"新方法太爽了"的对比图或最终效果]
+
+信息图/流程图：[如果有复杂步骤，建议画一张什么样的流程图] ]
+
+
 """
 
     with httpx.Client(proxy=None, timeout=REQUEST_TIMEOUT) as http_client:
