@@ -1,38 +1,56 @@
-# 🚀 王往AI 公众号工作流
+# 🚀 王往AI 公众号工作流 v4.0 (硬核价值版)
 
 一套完整的 AI 驱动的微信公众号内容生产工作流，从选题到发布**全流程自动化**。
 
-## ✨ 功能特性 (v3.0)
+## ✨ 功能特性 (v4.0)
 
-| 模块 | 功能 | 技术栈 |
+| 模块 | 功能 | 核心策略 |
 |------|------|--------|
-| 🎯 **选题雷达** | 全网扫描热点 (HN/Reddit/GitHub)，动态热词提取，记忆系统避免重复 | DeepSeek + Tavily |
-| 🔬 **自动研究** | **新功能** Exa AI 智能搜索 + 全文获取，强制锁定最近 30 天资讯 | Exa AI + Jina Reader |
-| ✍️ **写作智能体** | 读取研究笔记，生成符合人设的初稿 | DeepSeek Reasoner |
+| 🎯 **选题雷达** | 全网扫描热点，三级容错机制 (Jina/RSS/Tavily) | **大厂/开源优先** + **信源净化 (Anti-SEO)** + **严格去重** |
+| 🔬 **自动研究** | Exa AI 智能搜索 + 全文获取 + 自动笔记整理 | **批判性评估** (自动拉黑智商税工具) |
+| ✍️ **写作智能体** | 读取研究笔记，生成硬核技术流初稿 | **专家验证约束** (Anti-Wrapper) |
+| 🎨 **排版智能体** | 自动转换为微信风格 HTML，代码高亮 | **极客代码风** (VS Code 深色主题) |
+| 📤 **自动发布** | 一键上传素材并创建草稿 | **全自动闭环** |
 
 ## 🚀 快速开始
 
 ### 1. 启动全自动流程
+
 最简单的方式是一键运行完整流程：
-            └── 5_assets/       # 配图素材
-                └── (截图、信息图等)   # publish 时会上传到微信
+
+```bash
+# 1. 扫描选题 (建议早/中/晚各运行一次)
+python run.py hunt
+
+# 2. 综合决策 (每天一次，选出最终选题)
+python run.py final
+
+# 3. 自动研究 + 写作 (全自动)
+python run.py research
+python run.py draft
+
+# 4. 排版 + 发布
+python run.py format
+python run.py publish
 ```
 
 ### 📂 文件夹用途详解
 
-| 文件夹 | 用途 | 操作 |
+| 文件夹 | 用途 | 自动化状态 |
 |--------|------|------|
-| `1_topics/` | 选题报告 | `hunt` 生成，`final` 综合 |
-| `2_research/` | 研究素材 | **你编辑**：从 NotebookLM 粘贴笔记 |
-| `3_drafts/` | AI 初稿 | `draft` 生成，你可以参考 |
-| `4_publish/` | **待发布**定稿 | **你编辑**：润色后保存 `final.md` |
-| `5_assets/` | 配图素材 | **你添加**：截图、信息图等 |
+| `1_topics/` | 选题报告 | ✅ 全自动生成 |
+| `2_research/` | 研究笔记 | ✅ **全自动** (Exa AI + Jina) |
+| `3_drafts/` | AI 初稿 | ✅ 全自动生成 |
+| `4_publish/` | **待发布**定稿 | ✏️ **唯一人工环节**：润色后保存 `final.md` |
+| `5_assets/` | 配图素材 | ✏️ 人工添加截图 |
 
 **发布流程**：
 ```
-draft.md → 你润色 → final.md → format → output.html → publish → 微信草稿箱
-                                                  ↑
-                                            assets/ 图片自动上传
+hunt (雷达) → final (决策) → research (搜集) → draft (初稿)
+                                                  ↓
+                                            人工润色/配图
+                                                  ↓
+publish (上传草稿) ← format (排版) ← final.md (定稿)
 ```
 
 ## 🛠️ 安装
@@ -66,238 +84,50 @@ cp config.py.example config.py
 然后编辑 `config.py`，或通过环境变量设置：
 
 ```bash
-# DeepSeek API (必需)
+# DeepSeek API (核心大脑)
 set DEEPSEEK_API_KEY=sk-your-api-key-here
 
-# Tavily Search API (推荐，免费额度足够)
-# 申请地址：https://tavily.com
-set TAVILY_API_KEY=tvly-your-api-key
+# Exa AI (智能搜索核心)
+set EXA_API_KEY=your-exa-key
 
-# 微信公众号 API (可选，用于自动发布)
-set WECHAT_APP_ID=wx1234567890
-set WECHAT_APP_SECRET=your-app-secret
+# Tavily (备用搜索)
+set TAVILY_API_KEY=tvly-your-key
 ```
 
-### 4. 微信公众号配置（可选）
+## 🚀 核心模块详解
 
-如果要使用**自动发布**功能：
+### 1. 选题雷达 (Trend Hunter) 🎯
 
-1. 登录 [微信公众平台](https://mp.weixin.qq.com/)
-2. 进入「设置与开发」→「基本配置」
-3. 获取 `AppID` 和 `AppSecret`
-4. 将你的公网 IP 添加到「IP 白名单」
-5. 填入 `config.py` 或设置环境变量
+**v4.0 升级：三级容错 + 随机化**
 
-## 🚀 使用方法
-
-### 快速开始
-
-```bash
-# 查看帮助
-python run.py help
-
-# 🎯 选题雷达 (可多次运行)
-python run.py hunt
-
-# 🏆 综合决策，输出最终选题 + 3个提示词
-python run.py final
-
-# 🔬 自动研究 (新功能! Exa AI 智能搜索 + 全文获取)
-python run.py research
-
-# ✍️ 写作智能体
-python run.py draft
-
-# 🎨 排版智能体
-python run.py format
-
-# 📤 自动发布到微信草稿箱
-python run.py publish
-
-# 指定日期 (处理历史素材)
-python run.py research -d 1204     # MMDD 简写
-python run.py draft -d 2025-12-04  # 完整格式
-```
-
-### 完整工作流
-
-```mermaid
-graph TD
-    A[hunt ×N 早/中/晚] -->|多次扫描| B(report_xxxx.md × N)
-    B -->|python run.py final| C[FINAL_DECISION.md + 3个提示词]
-    C -->|python run.py research| D[🔬 Exa AI 自动搜索素材]
-    D -->|自动生成| E(notes.txt)
-    E -->|python run.py draft| F(draft.md)
-    F -->|人工补图润色| G(final.md)
-    G -->|python run.py format| H(output.html)
-    H -->|方式A: 手动| I[浏览器复制粘贴]
-    H -->|方式B: 自动| J[python run.py publish]
-```
-
-#### Step 1: 多次扫描选题 🎯
-
-```bash
-# 建议早/中/晚各运行一次，积累多份报告
-python run.py hunt
-python run.py hunt
-python run.py hunt
-```
-
-**v7.2 价值挖掘终极版 (Value Hacker)**
+- **三级容错机制**：Jina Primary -> Jina Backup (RSS) -> Tavily Search，确保从不空手而归。
 - **心理学三路搜索**：
     - 🎯 **A路 (锚点)**：死磕顶流 (DeepSeek/Kimi/Cursor) 隐藏玩法
-    - ⚡ **B路 (收益)**：挖掘 Life Hack 效率神器，主打"3分钟上手"
-    - 🛡️ **C路 (损失)**：扫描"避坑"、"智商税"、"平替"等高点击率话题
-- **价值过滤器**：剔除行业新闻/宏大叙事，只保留"获得感"强的实用选题
-- **工作流自动化**：自动创建 `research/`、`drafts/` 等后续文件夹
-- 输出：`data/archive/YYYY-MM-DD/1_topics/report_xxxx.md`
+    - ⚡ **B路 (收益)**：随机抽取 "效率神器"、"自动化办公" 词库
+    - 🛡️ **C路 (损失)**：随机抽取 "避坑"、"智商税"、"平替" 词库
+- **严格去重**：自动加载历史记录，禁止生成重复选题。
 
-#### Step 1.5: 综合决策 🏆
+### 2. 自动研究 (Auto Researcher) 🔬
 
-```bash
-python run.py final           # 处理今天的报告
-python run.py final -d 1204   # 处理指定日期的报告
-```
+**v4.0 升级：批判性评估过滤器**
 
-- **读取指定日期所有报告**，综合分析后给出最终推荐
-- 输出 **3 个结构化提示词**：
-    - 📡 **提示词1: Fast Research** → 用于 NotebookLM 搜索素材
-    - ✍️ **提示词2: 草稿大纲** → 复制到 NotebookLM，它会根据 Sources 完善大纲
-    - 🎨 **提示词3: 视觉脚本** → 点击 Studio → **Infographic** 生成信息图
-- 输出文件：`data/archive/YYYY-MM-DD/1_topics/FINAL_DECISION.md`
+- **Exa AI 智能搜索**：自动定位微信/知乎/掘金等高质量信源。
+- **反套壳机制**：在整理笔记时，自动识别并拉黑“付费套壳工具”（如笔灵、小发猫）。
+- **硬核验证**：只提取 Prompt 优化、API 接入、本地部署等真正的高阶玩法。
 
-#### Step 2: 自动研究 🔬
+### 3. 写作智能体 (Drafter) ✍️
 
-```bash
-python run.py research            # 处理今天的选题
-python run.py research -d 1204    # 处理指定日期的选题
-```
+**v4.0 升级：专家人设锁死**
 
-**v3.0 自动化研究** (替代 NotebookLM)：
-- 🚀 **Exa AI 智能搜索**：自动搜索微信/知乎/微博/小红书/V2EX/掘金等社媒
-- 📄 **全文获取**：Exa 直接返回清洗后的文章内容，无需第三方爬虫
-- 📝 **AI 整理笔记**：DeepSeek 自动提取核心观点、案例、避坑指南
-- 输出：`data/archive/YYYY-MM-DD/2_research/notes.txt`
+- **DeepSeek Reasoner 加持**：使用深度推理模型生成逻辑严密的文章。
+- **绝对禁忌**：严禁推荐任何“国内付费套壳工具”。
+- **技术流定义**：将“高阶玩法”严格定义为技术层面的解决方案。
 
-#### Step 3: 写初稿 ✍️
+### 4. 自动发布 (Publisher) 📤
 
-```bash
-python run.py draft            # 处理今天的笔记
-python run.py draft -d 1204    # 处理指定日期的笔记
-```
-
-- 读取研究笔记（自动备份到今日目录）
-- DeepSeek Reasoner 生成初稿（流式输出）
-- 输出：`data/archive/2025-12-02/draft.md`
-
-#### Step 4: 查看 TODO 📋
-
-```bash
-python run.py todo
-```
-
-- 列出草稿中所有需要补充的内容
-- 显示图片搜索关键词建议
-- 帮助你快速定位需要处理的部分
-
-#### Step 5: 润色 + 配图 ✨
-
-1. 打开 `3_drafts/draft.md`，润色文字
-2. **截图保存到 `5_assets/` 文件夹**
-3. **在 `final.md` 中引用图片**（见下方示例）
-4. 保存到 `4_publish/final.md`
-
-**📸 图片引用示例**：
-
-```markdown
-# 别再给 Cursor 送钱了！
-
-## 🔥 痛点：每月 20 刀太贵了
-
-很多人用 Cursor 写代码，但免费额度用完就要付费...
-
-![Cursor 收费页面截图](cursor-pricing.png)
-
-## 💡 解决方案：Gemini Code Assist
-
-Google 有个免费的平替工具，功能一样强！
-
-![Gemini Code Assist 界面](gemini-interface.png)
-
-## 📝 三步开启隐藏模式
-
-**第一步**：安装 VS Code 扩展
-
-![安装步骤截图](step1-install.png)
-
-**第二步**：启用 Agent 模式
-
-![启用 Agent 模式](step2-enable.png)
-
----
-**关注我，下次继续聊 AI 工具的骚操作 👆**
-```
-
-**文件结构**：
-```
-2025-12-04/
-├── 4_publish/
-│   └── final.md              # 引用图片: ![](xxx.png)
-└── 5_assets/
-    ├── cursor-pricing.png    # 截图1
-    ├── gemini-interface.png  # 截图2
-    ├── step1-install.png     # 截图3
-    └── step2-enable.png      # 截图4
-```
-
-#### Step 6: 排版 🎨
-
-```bash
-python run.py format -d 1204
-```
-
-- 转换为微信公众号兼容的 HTML
-- 壹伴风格（渐变标题、卡片引用、记号笔高亮）
-- 自动复制到剪贴板
-
-#### Step 7: 发布 📤（推荐自动）
-
-```bash
-python run.py publish -d 1204
-```
-
-- ✅ 自动从 `assets/` 读取图片并上传到微信
-- ✅ 第一张图自动作为封面
-- ✅ 一键创建草稿，去后台点发布即可！
-
-**手动发布**（图片需用图床）：
-1. 浏览器打开 `output.html`
-2. `Ctrl+A` 全选 → `Ctrl+C` 复制
-3. 粘贴到公众号**普通编辑模式**
-
-### 📅 日期归档说明
-
-每次运行脚本，文件会自动保存到 `data/archive/YYYY-MM-DD/` 目录下。
-
-这样设计的好处：
-
-- **历史可追溯**：每次创作的素材、初稿、定稿都有完整记录
-- **不会覆盖**：两三天更新一次，文件不会互相覆盖
-- **便于回顾**：随时查看过去写了什么
-
-## 🎨 排版风格
-
-采用**壹伴风格**，简洁专业：
-
-| 元素 | 样式 |
-|------|------|
-| 代码块 | VS Code 深色主题，圆角阴影 |
-| H2 标题 | 左侧微信绿竖条 + 渐变背景 |
-| H3 标题 | 简洁下划线 |
-| 强调文字 | 加粗 + 记号笔绿色高亮 |
-| 引用块 | 卡片式设计，圆角灰底 |
-| 图片 | 圆角 + 轻阴影 |
-| 链接 | 微信蓝 + 虚线下划线 |
+- ✅ 自动从 `assets/` 读取图片并上传到微信永久素材库
+- ✅ 自动替换文章中的图片链接
+- ✅ 一键创建草稿，无需登录微信后台
 
 ## ⚙️ 配置说明
 
@@ -305,49 +135,17 @@ python run.py publish -d 1204
 
 ```python
 # === API 配置 ===
-DEEPSEEK_API_KEY = "sk-your-key"  # 或 os.getenv("DEEPSEEK_API_KEY")
-EXA_API_KEY = "xxx"               # Exa AI: https://dashboard.exa.ai/
-TAVILY_API_KEY = "tvly-your-key"  # 备用: https://tavily.com
+DEEPSEEK_API_KEY = "sk-..." 
+EXA_API_KEY = "..."          # 核心搜索
+TAVILY_API_KEY = "tvly-..."  # 兜底搜索
 
 # === 微信公众号配置 ===
-WECHAT_APP_ID = "wx1234..."       # 或 os.getenv("WECHAT_APP_ID")
-WECHAT_APP_SECRET = "secret..."   # 或 os.getenv("WECHAT_APP_SECRET")
+WECHAT_APP_ID = "..."
+WECHAT_APP_SECRET = "..."
 
 # === 代理配置 ===
-PROXY_URL = "http://127.0.0.1:7898"  # 无需代理设为 None
-
-# === 人设标签 ===
-PERSONA_TAGS = ["AI", "DeepSeek", "效率", "工具", ...]
+PROXY_URL = "http://127.0.0.1:7898" 
 ```
-
-## 📦 依赖
-
-```text
-Python 3.9+
-
-# 选题雷达
-httpx, beautifulsoup4, tavily-python
-
-# 研究智能体 (Exa AI 通过 httpx 调用，无额外依赖)
-
-# 写作智能体
-openai
-
-# 排版智能体
-markdown-it-py, pygments, premailer, pyperclip, lxml
-
-# 发布智能体
-wechatpy, requests
-```
-
-安装命令：`pip install -r requirements.txt`
-
-## 🔒 安全说明
-
-- 所有敏感配置支持**环境变量**读取
-- 文章和图片仅在**本地 ↔ 微信服务器**之间传输
-- 不经过任何第三方服务器
-- 请勿将 `config.py` 中的真实密钥提交到公开仓库
 
 ## 🤝 作者
 
@@ -355,4 +153,4 @@ wechatpy, requests
 
 ---
 
-*用 AI 帮你偷懒，把省下的时间用来生活。*
+*用技术反击信息差，用 AI 捍卫硬核价值。*
