@@ -1,8 +1,11 @@
 """
-🎨 排版智能体 (Formatter) v1.0 - 极客代码风
+🎨 排版智能体 (Formatter) v4.0 (Hardcore Edition)
 """
 import sys, os, re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import logging
+from datetime import datetime
 
 from markdown_it import MarkdownIt
 from pygments import highlight
@@ -11,6 +14,9 @@ from pygments.formatters import HtmlFormatter
 from premailer import transform
 import pyperclip
 from config import get_final_file, get_html_file, get_today_dir, get_stage_dir
+
+# 静音 cssutils 日志
+logging.getLogger('cssutils').setLevel(logging.CRITICAL)
 
 WECHAT_CSS = """
 /* 微信公众号高级排版 - 壹伴风格 */
@@ -252,10 +258,10 @@ def inline_css(html):
 
 def main():
     print("\n" + "="*60 + "\n🎨 排版智能体 - 极客代码风\n" + "="*60 + "\n")
-    
+
     final_file = get_final_file()
     html_file = get_html_file()
-    
+
     print(f"📁 今日工作目录: {get_today_dir()}\n")
     print(f"📖 读取 {final_file}...")
     
@@ -263,6 +269,12 @@ def main():
         print(f"❌ 找不到 {final_file}")
         print(f"   请先将润色后的定稿保存到: {get_stage_dir('publish')}/final.md")
         return
+
+    try:
+        mtime = os.path.getmtime(final_file)
+        print(f"🕒 输入文件最后修改时间: {datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')}")
+    except Exception:
+        pass
     
     with open(final_file, "r", encoding="utf-8") as f:
         md = f.read()

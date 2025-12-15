@@ -1,5 +1,5 @@
 """
-🚀 全网选题雷达 (Trend Hunter Agent) v4.0 - 硬核价值版
+🚀 全网选题雷达 (Trend Hunter Agent) v4.0 (Hardcore Edition)
 核心策略：
 1. 三级容错机制：Jina Primary -> Jina Backup (RSS) -> Tavily Search，确保数据源稳定。
 2. 随机化扫描：B路(效率)与C路(避坑)采用随机抽取策略，避免重复。
@@ -12,7 +12,7 @@ import time
 import json
 import httpx
 import random
-from datetime import datetime, timedelta
+from datetime import datetime
 from bs4 import BeautifulSoup
 from openai import OpenAI
 from config import (
@@ -425,14 +425,26 @@ def extract_hot_entities(client, search_results):
 
 # ================= 核心逻辑 =================
 
-def get_plan_prompt(history_text=""):
-    """动态生成规划提示词，注入当前日期和历史记录"""
+def get_plan_prompt(history_text="", directed_topic=None):
+    """动态生成规划提示词，注入当前日期、历史记录和用户意图"""
     today = datetime.now().strftime('%Y-%m-%d')
+    
+    intent_instruction = ""
+    if directed_topic:
+        intent_instruction = f"""
+    👤 **用户核心指令**：
+    用户指定了主题【{directed_topic}】。
+    1. 你生成的 3 个选题中，**必须包含**至少 1 个与【{directed_topic}】深度相关的选题（作为 A 方案）。
+    2. 同时，请从情报池中挖掘另外 1-2 个**高潜质**的随机热点或关联话题（作为 Plan B/C），与用户指定主题进行"价值PK"。
+    3. 如果发现【{directed_topic}】目前毫无新意（无新闻、无痛点），你可以"抗旨"，全推其他更有价值的热点，但必须在分析中说明理由。
+    """
+    
     return f"""
-📅 今天是 {today}。你必须只关注最近 3-7 天内发生的 AI 圈最新大事件。
-❗ 绝对禁止报道 2024 年或更早的旧闻（如 DeepSeek R1、GPT-4 发布等历史事件）。
+    📅 今天是 {today}。你必须只关注最近 3-7 天内发生的 AI 圈最新大事件。
+    ❗ 绝对禁止报道 2024 年或更早的旧闻（如 DeepSeek R1、GPT-4 发布等历史事件）。
+    {intent_instruction}
 
-【历史发文记录 (最近7天)】
+    【历史发文记录 (最近7天)】
 {history_text}
 ⚠️ 查重指令：如果上述历史记录中已存在相似选题，请必须调整切入角度（例如：从"新闻报道"转向"深度实测"或"避坑指南"）。如果无法差异化，请直接丢弃该选题。
 
@@ -468,9 +480,14 @@ def get_plan_prompt(history_text=""):
 # 保留历史兼容性
 PLAN_PROMPT = get_plan_prompt()
 
-def step1_broad_scan_and_plan(client, search_tool):
-    """Step 1: 广域价值扫描 (心理学三路策略 + 全网雷达)"""
+def step1_broad_scan_and_plan(client, search_tool, directed_topic=None):
+    """
+    Step 1: 广域价值扫描 (心理学三路策略 + 全网雷达)
+    混合模式：如果传入 directed_topic，将其作为 A 路核心，同时保留 B/C 路随机探索
+    """
     print(f"\n📡 [Step 1] 广域价值扫描 (策略: {CURRENT_CONFIG['name']})...")
+    if directed_topic:
+        print(f"   🎯 [混合模式] 核心主题: 「{directed_topic}」 + 全网随机扫描")
     
     pre_scan_results = []
     
@@ -500,22 +517,26 @@ def step1_broad_scan_and_plan(client, search_tool):
         print(f"      ⚠️ 热榜抓取异常，跳过: {e}")
     
     # === A路: 顶流锚点 (Watchlist + Hotspots + Fresh) ===
-    # 随机选 3 个顶流
-    targets = random.sample(WATCHLIST, 3)
-    
-    # 将热榜关键词加入 targets (最高优先级)
-    for fk in fresh_keywords:
-        if not any(fk.lower() in t.lower() for t in targets):
-            targets.insert(0, fk)
-    
-    # 将热点加入 targets (优先侦察)
-    for h in hot_entities:
-        # 简单去重：如果 target 里没有类似的字符串
-        if not any(h.lower() in t.lower() for t in targets):
-            targets.insert(0, h)
-            
-    # 限制扫描数量，避免过载
-    targets = targets[:6]
+    if directed_topic:
+        # 定向模式：核心是 directed_topic，但也接纳突发热点
+        targets = [directed_topic]
+        # 适当加入热点（如果有重大突发），但也可能被 LLM 过滤
+        for h in hot_entities:
+            if h.lower() not in directed_topic.lower():
+                targets.append(h)
+        targets = targets[:4] # 保持聚焦
+    else:
+        # 随机模式
+        targets = random.sample(WATCHLIST, 3)
+        # 将热榜关键词加入 targets (最高优先级)
+        for fk in fresh_keywords:
+            if not any(fk.lower() in t.lower() for t in targets):
+                targets.insert(0, fk)
+        # 将热点加入 targets (优先侦察)
+        for h in hot_entities:
+            if not any(h.lower() in t.lower() for t in targets):
+                targets.insert(0, h)
+        targets = targets[:6]
 
     print(f"   🎯 [A路-锚点] 扫描目标: {targets}")
     for t in targets:
@@ -536,6 +557,10 @@ def step1_broad_scan_and_plan(client, search_tool):
         "自动化工作流 Zapier", "AI 剪辑视频", "AI 录音转文字 免费"
     ]
     selected_efficiency = random.sample(efficiency_keywords, 3)
+    if directed_topic:
+        # 混合模式：加入定向主题的效率场景
+        selected_efficiency.insert(0, f"{directed_topic} 效率神器")
+        
     print(f"      🎲 随机抽取: {selected_efficiency}")
     for kw in selected_efficiency:
         # B路: 强制追加高质量信源，过滤 SEO 垃圾
@@ -550,6 +575,10 @@ def step1_broad_scan_and_plan(client, search_tool):
         "DeepSeek 报错", "ChatGPT 封号", "Cursor 太贵", "Copilot 不好用"
     ]
     selected_pain = random.sample(pain_keywords, 3)
+    if directed_topic:
+        # 混合模式：加入定向主题的避坑场景
+        selected_pain.insert(0, f"{directed_topic} 避坑 吐槽")
+        
     print(f"      🎲 随机抽取: {selected_pain}")
     for kw in selected_pain:
         # C路: 强制追加社区信源
@@ -571,7 +600,7 @@ def step1_broad_scan_and_plan(client, search_tool):
         response = client.chat.completions.create(
             model="deepseek-chat",
             messages=[
-                {"role": "system", "content": get_plan_prompt(history_text)},
+                {"role": "system", "content": get_plan_prompt(history_text, directed_topic)},
                 {"role": "user", "content": f"【混合情报池】\n{pre_scan_text}"}
             ],
             temperature=0.7,
@@ -591,8 +620,25 @@ def step1_broad_scan_and_plan(client, search_tool):
         print(f"   ❌ 规划失败: {e}")
         return [{"event": "DeepSeek", "angle": "避坑", "news_query": "DeepSeek V3", "social_query": "DeepSeek 幻觉"}]
 
-def step2_deep_scan(search_plan, search_tool):
-    """Step 2: 深度验证 (重社交/痛点)"""
+def _clean_text(text, max_len=100):
+    """清洗文本：移除多余空白、HTML标签、截断长度"""
+    if not text:
+        return ""
+    # 移除多余空白和换行
+    import re
+    text = re.sub(r'\s+', ' ', text).strip()
+    # 移除常见 HTML 标签残留
+    text = re.sub(r'<[^>]+>', '', text)
+    # 截断并添加省略号
+    if len(text) > max_len:
+        text = text[:max_len] + "..."
+    return text
+
+def step2_deep_scan(search_plan, search_tool, directed_topic=None):
+    """
+    Step 2: 深度验证 (重社交/痛点)
+    输出格式：清晰的 Markdown 列表，包含摘要和来源 URL
+    """
     print("📡 [Step 2] 启动深度价值验证...\n")
     all_results = []
     
@@ -604,27 +650,52 @@ def step2_deep_scan(search_plan, search_tool):
         angle = item.get("angle", "通用")
         news_q = item.get("news_query", "")
         social_q = item.get("social_query", "")
+
+        is_core = False
+        if directed_topic and event:
+            dt = str(directed_topic).lower()
+            ev = str(event).lower()
+            is_core = (dt in ev) or (ev in dt)
+
+        # 防干扰：定向模式下，把更多检索额度留给核心主题；非核心主题降配额
+        social_max_results = 4
+        news_max_results = 2
+        if directed_topic:
+            social_max_results = 4 if is_core else 2
+            news_max_results = 2 if is_core else 1
         
         print(f"   🔍 正在深挖: 【{event}】 ({angle}方向)")
-        event_data = [f"=== 选题: {event} ({angle}) ==="]
+        event_data = [f"### 🎯 选题: {event} ({angle})"]
         
         # 1. 社交/痛点搜索 (核心)
         if social_q:
             print(f"      💬 社交舆情 (权重 {w_social}): {social_q}")
-            # 增加知乎、B站(site:bilibili.com)
             full_social_q = f"{social_q} site:mp.weixin.qq.com OR site:xiaohongshu.com OR site:zhihu.com OR site:bilibili.com"
-            res = search_tool.search(full_social_q, max_results=4)
+            res = search_tool.search(full_social_q, max_results=social_max_results)
             if res:
-                event_data.append(f"--- 用户真实反馈 ({social_q}) ---")
-                event_data.extend([f"- {r['title']}: {r['body'][:80]}..." for r in res])
+                event_data.append(f"\n**💬 用户反馈** ({social_q})")
+                for r in res:
+                    title = _clean_text(r.get('title', '无标题'), 50)
+                    body = _clean_text(r.get('body', ''), 100)
+                    url = r.get('url', '')
+                    if url:
+                        event_data.append(f"- **{title}**: {body} [[来源]({url})]")
+                    else:
+                        event_data.append(f"- **{title}**: {body}")
                 
         # 2. 官方验证 (辅助)
         if news_q:
             print(f"      🔥 官方验证 (权重 {w_news}): {news_q}")
-            res = search_tool.search(news_q, max_results=2)
+            res = search_tool.search(news_q, max_results=news_max_results)
             if res:
-                event_data.append(f"--- 官方信息 ({news_q}) ---")
-                event_data.extend([f"- {r['title']}" for r in res])
+                event_data.append(f"\n**📰 官方信息** ({news_q})")
+                for r in res:
+                    title = _clean_text(r.get('title', '无标题'), 60)
+                    url = r.get('url', '')
+                    if url:
+                        event_data.append(f"- {title} [[来源]({url})]")
+                    else:
+                        event_data.append(f"- {title}")
         
         all_results.append("\n".join(event_data))
         print("")
@@ -633,16 +704,29 @@ def step2_deep_scan(search_plan, search_tool):
     # GitHub 补充 (Weekly)
     print(f"   💻 GitHub Weekly Trending...")
     github_res = get_github_trending()
-    all_results.append("=== GitHub Weekly Trending ===\n" + "\n".join(github_res))
+    all_results.append("### 💻 GitHub Weekly Trending\n" + "\n".join(github_res))
     
-    return "\n\n".join(all_results)
+    return "\n\n---\n\n".join(all_results)
 
-def step3_final_decision(scan_data, client, history_text="无（这是第一篇）"):
-    """Step 3: 决策（带去重和新词扶持）"""
+def step3_final_decision(scan_data, client, history_text="无（这是第一篇）", directed_topic=None):
+    """Step 3: 决策（带去重和新词扶持 + 用户意图加权）"""
     print("\n" + "="*50 + "\n📝 DeepSeek 主编审核中...\n" + "="*50)
     
+    # 构造用户意图提示
+    user_intent_prompt = ""
+    if directed_topic:
+        user_intent_prompt = f"""
+    👤 **用户意图（最高优先级）**：
+    用户明确希望写关于【{directed_topic}】的内容。
+    **决策原则**：
+    1. 默认优先：在同等价值下，优先选择与【{directed_topic}】相关的选题。
+    2. 允许抗旨：只有当扫描到的其他热点（如突发重大技术更新）具有**极高的爆款潜质**时，你才建议放弃用户指定主题。
+    3. 混合策略：如果可能，尝试将【{directed_topic}】与其他热点结合（例如 "用 {directed_topic} 解决这个新热点问题"）。
+    """
+
     prompt = f"""
     {EDITOR_PROMPT}
+    {user_intent_prompt}
     
     ❌ **严格去重**：以下是最近已写过的选题：
     {history_text}
@@ -719,7 +803,7 @@ def auto_init_workflow():
     notes_file = get_research_notes_file()
     if not os.path.exists(notes_file):
         with open(notes_file, "w", encoding="utf-8") as f:
-            f.write("# 研究笔记\n\n请将 NotebookLM 生成的 Briefing Doc 粘贴在这里...\n")
+            f.write("# 研究笔记\n\n说明：此文件通常由 `python run.py research` 自动生成。\n如需人工补充，请在此处追加你的关键发现与引用链接。\n")
         print(f"   📄 笔记文件已创建: {notes_file}")
     
     # 3. 提示下一步
@@ -727,9 +811,10 @@ def auto_init_workflow():
     print("   - 可继续运行 hunt 获取更多选题")
     print("   - 或运行 `python run.py final` 综合所有报告，获得 3 个提示词")
 
-def save_report(raw_data, analysis):
+def save_report(raw_data, analysis, directed_topic=None):
     filename = get_topic_report_file()
-    content = f"# 🚀 选题雷达报告 v7.0 ({CURRENT_CONFIG['name']})\n\n**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n**策略**: {CURRENT_CONFIG['strategy']}\n\n## 深度验证情报\n{raw_data}\n\n## 选题分析\n{analysis}"
+    mode_info = f"定向搜索: {directed_topic}" if directed_topic else CURRENT_CONFIG['name']
+    content = f"# 🚀 选题雷达报告 v4.0 ({mode_info})\n\n**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n**策略**: {CURRENT_CONFIG['strategy']}\n\n## 深度验证情报\n\n{raw_data}\n\n---\n\n## 选题分析\n\n{analysis}"
     with open(filename, "w", encoding="utf-8") as f:
         f.write(content)
     print(f"\n\n📁 报告已保存: {filename}")
@@ -737,14 +822,18 @@ def save_report(raw_data, analysis):
     # 保存后自动初始化工作流
     auto_init_workflow()
 
-def main():
-    print("\n" + "="*60 + "\n🚀 全网选题雷达 v7.0 (价值挖掘版) - 王往AI\n" + "="*60 + "\n")
+def main(topic=None):
+    """
+    选题雷达主入口
+    参数:
+        topic: 可选，指定搜索主题。若提供，将启用“混合优先级”：主题优先，但仍保留全网随机探索以捕捉突发热点
+    """
+    mode_text = f"定向搜索: {topic}" if topic else "全网雷达"
+    print("\n" + "="*60 + f"\n🚀 选题雷达 v4.0 ({mode_text}) - 王往AI\n" + "="*60 + "\n")
     
     search_tool = WebSearchTool()
     
-    # DeepSeek 建议直连，不走代理 (除非 api.deepseek.com 被墙)
-    # 这里我们将 proxy 设为 None，确保它不走 PROXY_URL
-    with httpx.Client(proxy=None, timeout=REQUEST_TIMEOUT) as http_client:
+    with httpx.Client(proxy=PROXY_URL, timeout=REQUEST_TIMEOUT) as http_client:
         client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL, http_client=http_client)
         
         # 加载历史记录用于去重
@@ -752,17 +841,17 @@ def main():
         history_text = "\n".join([f"- {h['date']}: {h['topic']} ({h['angle']})" for h in history])
         if not history_text: history_text = "无（这是第一篇）"
         
-        # 1. 广域扫描 (Watchlist + Trend + Pain)
-        search_plan = step1_broad_scan_and_plan(client, search_tool)
+        # 1. 广域扫描 / 定向搜索
+        search_plan = step1_broad_scan_and_plan(client, search_tool, directed_topic=topic)
         
         # 2. 深度验证
-        raw_data = step2_deep_scan(search_plan, search_tool)
+        raw_data = step2_deep_scan(search_plan, search_tool, directed_topic=topic)
         
         # 3. 决策（传入历史记录用于去重）
-        analysis = step3_final_decision(raw_data, client, history_text)
+        analysis = step3_final_decision(raw_data, client, history_text, directed_topic=topic)
         
         # 4. 保存
-        save_report(raw_data, analysis)
+        save_report(raw_data, analysis, directed_topic=topic)
     
     print("\n✅ 选题雷达完成！")
 
@@ -812,9 +901,9 @@ def final_summary():
 **一句话卖点**：[用户看完能得到什么？]
 **关键词**：[3-5个搜索关键词，用于后续素材搜集]
 
-### 📡 提示词 1：Fast Research (用于 NotebookLM 搜索素材)
+### 📡 提示词 1：Fast Research (用于自动研究 / research 阶段)
 ```
-[请用中文，告诉 NotebookLM 需要搜索哪些具体内容，包括：
+[请用中文，告诉 Researcher 需要搜索哪些具体内容，包括：
 - 官方文档/教程
 - 用户真实评价/避坑经验
 - 同类工具对比
@@ -823,7 +912,6 @@ def final_summary():
 ```
 
 ### 🎨 提示词 2：视觉脚本 (用于配图方案)
-**使用方法**：复制到 NotebookLM Chat，然后点击右侧 Studio → **Infographic** 生成信息图
 ```
 [请用中文，建议需要准备的配图，包括：
 - 关键截图 (哪个界面、哪个步骤)
@@ -848,7 +936,7 @@ def final_summary():
 
 """
 
-    with httpx.Client(proxy=None, timeout=REQUEST_TIMEOUT) as http_client:
+    with httpx.Client(proxy=PROXY_URL, timeout=REQUEST_TIMEOUT) as http_client:
         client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL, http_client=http_client)
         
         try:

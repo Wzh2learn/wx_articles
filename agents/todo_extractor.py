@@ -1,5 +1,5 @@
 """
-📋 TODO 提取器 - 从草稿中提取待办事项
+📋 TODO 提取器 v4.0 (Hardcore Edition) - 从草稿中提取待办事项
 """
 import sys, os, re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -50,7 +50,7 @@ def main():
             f.write(f"[ ] {i}. {todo}\n")
     
     print(f"\n💾 已保存到: {todo_file}")
-    print(f"\n� 下一步：")
+    print(f"\n💡 下一步：")
     print(f"   1. 截图保存到: {get_stage_dir('assets')}")
     print(f"   2. 编辑 {draft_path} 替换 TODO 标记")
     print(f"   3. 润色完成后保存到: {get_stage_dir('publish')}/final.md")

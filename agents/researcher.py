@@ -1,6 +1,6 @@
 """
 ===============================================================================
-                    🔬 研究智能体 (Researcher Agent) v4.0 (硬核价值版)
+                    🔬 研究智能体 (Researcher Agent) v4.0 (Hardcore Edition)
 ===============================================================================
 核心策略：
 1. 智能聚合搜索：Exa AI (优先) + Tavily (兜底)，全网深度挖掘。
@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import httpx
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from openai import OpenAI
 from tavily import TavilyClient
 from config import (
@@ -30,8 +31,8 @@ class ResearcherAgent:
     
     def __init__(self):
         # 初始化 DeepSeek 客户端
-        # 强制使用系统代理确保连接稳定
-        proxy_url = PROXY_URL or "http://127.0.0.1:7898"
+        # 使用统一配置中的代理；如不需要代理请在 config.py 中将 PROXY_URL 设为 None
+        proxy_url = PROXY_URL
         self.client = OpenAI(
             api_key=DEEPSEEK_API_KEY,
             base_url=DEEPSEEK_BASE_URL,
@@ -44,7 +45,7 @@ class ResearcherAgent:
         self.exa_api_key = EXA_API_KEY
         self.proxy_url = proxy_url
         
-        print(f"   ✅ ResearcherAgent v2.0 初始化完成 (Exa + Tavily)")
+        print(f"   ✅ ResearcherAgent v4.0 初始化完成 (Exa + Tavily)")
 
     def search_exa(self, topic: str, queries: list[str]) -> list[dict]:
         """
@@ -269,7 +270,7 @@ class ResearcherAgent:
 
     def run(self, topic: str, queries: list[str]) -> str:
         print("\n" + "="*60)
-        print(f"🔬 ResearcherAgent v2.0 (Exa AI)")
+        print(f"🔬 ResearcherAgent v4.0 (Exa AI)")
         print(f"📌 选题: {topic}")
         print("="*60)
         
@@ -294,7 +295,7 @@ class ResearcherAgent:
         # 保存
         notes_file = get_research_notes_file()
         with open(notes_file, "w", encoding="utf-8") as f:
-            f.write(f"# 🔬 自动研究笔记 (Exa AI)\n\n**选题**: {topic}\n**时间**: {__import__('datetime').datetime.now()}\n\n---\n\n{notes}")
+            f.write(f"# 🔬 自动研究笔记 (Exa AI)\n\n**选题**: {topic}\n**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n---\n\n{notes}")
             
         print(f"\n📁 笔记已保存: {notes_file}")
         return notes

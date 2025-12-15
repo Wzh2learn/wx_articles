@@ -1,5 +1,5 @@
 """
-✍️ 写作智能体 (Drafter) v4.0 - 硬核技术流版
+✍️ 写作智能体 (Drafter) v4.0 (Hardcore Edition)
 核心策略：
 1. DeepSeek Reasoner：使用深度推理模型，确保逻辑严密。
 2. 专家验证约束：拒绝模棱两可，建立权威人设。

@@ -1,6 +1,6 @@
 """
 ===============================================================================
-                    ✨ 润色智能体 (Refiner Agent)
+                    ✨ 润色智能体 (Refiner Agent) v4.0 (Hardcore Edition)
 ===============================================================================
 根据用户的自然语言指令，对草稿进行定向修改，生成定稿。
 
@@ -16,6 +16,7 @@ import os
 # 添加项目根目录到 path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import httpx
 from openai import OpenAI
 import config
 
@@ -101,9 +102,11 @@ def refine_article(instruction: str, date: str = None):
     print("\n🚀 调用 DeepSeek Reasoner...")
     print("\n" + "=" * 20 + " 润色中 " + "=" * 20 + "\n")
     
+    http_client = httpx.Client(proxy=config.PROXY_URL, timeout=getattr(config, 'REQUEST_TIMEOUT', 120))
     client = OpenAI(
         api_key=config.DEEPSEEK_API_KEY,
-        base_url=config.DEEPSEEK_BASE_URL
+        base_url=config.DEEPSEEK_BASE_URL,
+        http_client=http_client
     )
     
     try:
