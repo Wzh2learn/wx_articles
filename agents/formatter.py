@@ -13,7 +13,10 @@ from pygments.lexers import get_lexer_by_name, TextLexer
 from pygments.formatters import HtmlFormatter
 from premailer import transform
 import pyperclip
-from config import get_final_file, get_html_file, get_today_dir, get_stage_dir
+from config import get_final_file, get_html_file, get_today_dir, get_stage_dir, get_logger
+
+
+logger = get_logger(__name__)
 
 # 静音 cssutils 日志
 logging.getLogger('cssutils').setLevel(logging.CRITICAL)
@@ -253,57 +256,59 @@ def inline_css(html):
         inlined = transform(full, remove_classes=False, keep_style_tags=True)
         return inlined
     except Exception as e:
-        print(f"⚠️ CSS内联失败: {e}")
+        logger.warning("⚠️ CSS内联失败: %s", e)
         return full
 
 def main():
-    print("\n" + "="*60 + "\n🎨 排版智能体 - 极客代码风\n" + "="*60 + "\n")
+    logger.info("%s", "="*60)
+    logger.info("🎨 排版智能体 - 极客代码风")
+    logger.info("%s", "="*60)
 
     final_file = get_final_file()
     html_file = get_html_file()
 
-    print(f"📁 今日工作目录: {get_today_dir()}\n")
-    print(f"📖 读取 {final_file}...")
+    logger.info("📁 今日工作目录: %s", get_today_dir())
+    logger.info("📖 读取 %s...", final_file)
     
     if not os.path.exists(final_file):
-        print(f"❌ 找不到 {final_file}")
-        print(f"   请先将润色后的定稿保存到: {get_stage_dir('publish')}/final.md")
+        logger.error("❌ 找不到 %s", final_file)
+        logger.error("   请先将润色后的定稿保存到: %s/final.md", get_stage_dir('publish'))
         return
 
     try:
         mtime = os.path.getmtime(final_file)
-        print(f"🕒 输入文件最后修改时间: {datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info("🕒 输入文件最后修改时间: %s", datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S'))
     except Exception:
         pass
     
     with open(final_file, "r", encoding="utf-8") as f:
         md = f.read()
-    print(f"   ✓ 共 {len(md)} 字符\n")
+    logger.info("✓ 共 %s 字符", len(md))
     
-    print("🔄 转换 Markdown -> HTML...")
+    logger.info("🔄 转换 Markdown -> HTML...")
     html = convert_md_to_html(md)
-    print("🎨 内联 CSS...")
+    logger.info("🎨 内联 CSS...")
     final = inline_css(html)
     
     with open(html_file, "w", encoding="utf-8") as f:
         f.write(final)
-    print(f"📄 已保存: {html_file}")
+    logger.info("📄 已保存: %s", html_file)
     
     try:
         pyperclip.copy(final)
-        print("📋 已复制到剪贴板！\n")
-    except:
-        print("⚠️ 复制失败，请手动复制 output.html\n")
+        logger.info("📋 已复制到剪贴板！")
+    except Exception:
+        logger.warning("⚠️ 复制失败，请手动复制 output.html")
     
-    print("="*60)
-    print("✅ 排版完成！")
-    print("\n📌 下一步（重要！）：")
-    print(f"   1. 用浏览器打开: {html_file}")
-    print("   2. 在页面上 Ctrl+A 全选内容")
-    print("   3. Ctrl+C 复制")
-    print("   4. 到公众号【普通编辑模式】Ctrl+V 粘贴")
-    print("   5. ⚠️ 遇到虚线框占位符时，请手动上传并插入对应图片！")
-    print("="*60)
+    logger.info("%s", "="*60)
+    logger.info("✅ 排版完成！")
+    logger.info("📌 下一步（重要！）：")
+    logger.info("   1. 用浏览器打开: %s", html_file)
+    logger.info("   2. 在页面上 Ctrl+A 全选内容")
+    logger.info("   3. Ctrl+C 复制")
+    logger.info("   4. 到公众号【普通编辑模式】Ctrl+V 粘贴")
+    logger.info("   5. ⚠️ 遇到虚线框占位符时，请手动上传并插入对应图片！")
+    logger.info("%s", "="*60)
 
 if __name__ == "__main__":
     main()

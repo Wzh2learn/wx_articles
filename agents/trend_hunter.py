@@ -12,14 +12,43 @@ import time
 import json
 import httpx
 import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from typing import List, Dict, Optional, Any
 from bs4 import BeautifulSoup
 from openai import OpenAI
 from config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, PROXY_URL, REQUEST_TIMEOUT,
     TAVILY_API_KEY, get_topic_report_file, get_today_dir,
-    get_stage_dir, get_research_notes_file, get_history_file
+    get_stage_dir, get_research_notes_file, get_history_file, get_logger, retryable
 )
+from settings_data import (
+    WATCHLIST, TREND_SOURCES, OPERATIONAL_PHASE, PHASE_CONFIG,
+    EFFICIENCY_KEYWORDS, PAIN_KEYWORDS, RADAR_QUERIES,
+    MAX_CONCURRENT_FETCHES, FETCH_TIMEOUT_SECONDS
+)
+
+
+logger = get_logger(__name__)
+
+
+def log_print(*args, **kwargs):
+    end = kwargs.get("end", "\n")
+    flush = kwargs.get("flush", False)
+    msg = " ".join(str(a) for a in args)
+
+    if end == "" or flush:
+        sys.stdout.write(msg + end)
+        if flush:
+            sys.stdout.flush()
+        return
+
+    if "❌" in msg:
+        logger.error(msg)
+    elif "⚠️" in msg or "🛡️" in msg:
+        logger.warning(msg)
+    else:
+        logger.info(msg)
 
 # ================= 历史记录管理 =================
 
@@ -72,35 +101,9 @@ def save_topic_to_history(topic, angle):
         
     with open(history_file, "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
-    print(f"   💾 历史记录已更新: {topic}")
+    log_print(f"   💾 历史记录已更新: {topic}")
 
-# ================= 配置区 =================
-
-# 长期关注矩阵 (流量基本盘)
-WATCHLIST = [
-    # 顶流模型 (国际)
-    "DeepSeek V3", "Claude 3.5", "Gemini 2.0", "GPT-4o", "Llama 3",
-    # 国内大厂 (新增)
-    "智谱 AI", "AutoGLM", "通义千问 Qwen", "豆包", "Kimi", "秘塔搜索",
-    # 热门技术
-    "MCP协议", "AI Agent", "RAG", "AI 编程", "AI 视频生成", "手机智能体",
-    # 编程神器
-    "Cursor", "Windsurf", "Bolt.new", "Lovable",
-    # 效率标杆
-    "Notion", "Obsidian", "Heptabase"
-]
-
-# 运营阶段配置
-OPERATIONAL_PHASE = "VALUE_HACKER" # 价值黑客
-
-PHASE_CONFIG = {
-    "VALUE_HACKER": {
-        "name": "价值黑客模式",
-        "weights": {"news": 1.5, "social": 2.0, "github": 1.0}, # 平衡权重：提升新闻权重，确保不漏大事件
-        "strategy": "利用心理学锚点(收益/损失)，挖掘能给用户带来'获得感'的选题。",
-        "prompt_suffix": "⚠️ 绝对原则：像一个'生活黑客'一样思考。但必须对'重大技术更新'保持敏感（如新模型发布）。如果是工具，必须是普通人手机/电脑能装的；如果是教程，必须是小白能看懂的。"
-    }
-}
+# ================= 配置区（从 settings_data.py 导入） =================
 
 CURRENT_CONFIG = PHASE_CONFIG[OPERATIONAL_PHASE]
 
@@ -111,12 +114,12 @@ class WebSearchTool:
         self.api_key = TAVILY_API_KEY
         self.enabled = bool(self.api_key and len(self.api_key) > 10)
         if self.enabled:
-            print("   ✅ Tavily Search API 已启用")
+            log_print("   ✅ Tavily Search API 已启用")
     
     def search(self, query, max_results=5, include_answer=False, topic=None, days=3):
         """Tavily 搜索，强制只返回最近 N 天的新闻"""
         if not self.enabled: return []
-        print(f"   🔍 Tavily (最近{days}天): {query}")
+        log_print(f"   🔍 Tavily (最近{days}天): {query}")
         url = "https://api.tavily.com/search"
         payload = {
             "api_key": self.api_key,
@@ -134,7 +137,11 @@ class WebSearchTool:
             # 使用 trust_env=False 防止读取系统环境变量导致混乱，显式指定 proxy
             proxies = PROXY_URL if PROXY_URL else None
             with httpx.Client(timeout=30, proxy=proxies) as client:
-                resp = client.post(url, json=payload)
+                @retryable
+                def _post():
+                    return client.post(url, json=payload)
+
+                resp = _post()
                 resp.raise_for_status()
                 data = resp.json()
                 results = []
@@ -148,18 +155,22 @@ class WebSearchTool:
                     })
                 return results
         except Exception as e:
-            print(f"      ❌ 搜索失败: {e}")
+            log_print(f"      ❌ 搜索失败: {e}")
             return []
 
 # ================= 辅助函数 =================
 
 def get_github_trending():
-    print("   🔍 GitHub Trending (Weekly)...")
+    log_print("   🔍 GitHub Trending (Weekly)...")
     url = "https://github.com/trending?since=weekly" # 全语言 Weekly，范围更广
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
         with httpx.Client(proxy=PROXY_URL, timeout=15) as client:
-            resp = client.get(url, headers=headers)
+            @retryable
+            def _get():
+                return client.get(url, headers=headers)
+
+            resp = _get()
         soup = BeautifulSoup(resp.text, 'html.parser')
         repos = soup.select('article.Box-row')
         results = []
@@ -176,98 +187,92 @@ def get_github_trending():
 
 # ================= 热榜动态抓取 =================
 
-def fetch_dynamic_trends(client, search_tool=None):
+def _fetch_single_source(
+    source: Dict[str, str],
+    search_tool: Optional["WebSearchTool"]
+) -> Optional[str]:
     """
-    从热榜网站抓取实时关键词（三级容错机制）
-    1. Jina Primary -> 2. Jina Backup (RSS) -> 3. Tavily Search
+    抓取单个热榜源（供并发调用）。
+    隔离异常，保证单源失败不影响整体。
     """
-    print("   🌐 [热榜抓取] 从全网热榜获取实时趋势...")
-    
-    sources = [
-        # === 国际硬核源 ===
-        {
-            "name": "Hacker News",
-            "tag": "硬核技术",
-            "primary": "https://news.ycombinator.com",
-            "backup": "https://news.ycombinator.com/rss"
-        },
-        {
-            "name": "Product Hunt",
-            "tag": "效率工具新品",
-            "primary": "https://www.producthunt.com",
-            "backup": "https://www.producthunt.com/feed"
-        },
-        
-        # === 国内大众/实战源 ===
-        {
-            "name": "知乎热榜-科技",
-            "tag": "AI观点与争议",
-            "primary": "https://www.zhihu.com/hot/technology",
-            "backup": "https://rsshub.app/zhihu/hotlist"
-        },
-        {
-            "name": "掘金-后端/AI",
-            "tag": "程序员实战",
-            "primary": "https://juejin.cn/hot/articles",
-            "backup": "https://rsshub.app/juejin/trending/all/weekly"
-        },
-        {
-            "name": "36Kr-科技",
-            "tag": "科技大众化/行业动态",
-            "primary": "https://36kr.com/information/technology",
-            "backup": "https://36kr.com/feed"
-        },
-        {
-            "name": "微博热搜-科技",
-            "tag": "大众舆情/突发",
-            "primary": "https://s.weibo.com/top/summary?cate=scitech",
-            "backup": "https://rsshub.app/weibo/search/hot"
-        },
-        {
-            "name": "少数派",
-            "tag": "生活黑客/效率方法论",
-            "primary": "https://sspai.com/tag/%E6%95%88%E7%8E%87/hot",
-            "backup": "https://sspai.com/feed"
-        },
-        {
-            "name": "CSDN热榜",
-            "tag": "技术教程/报错解决",
-            "primary": "https://blog.csdn.net/rank/list",
-            "backup": ""  # CSDN 无稳定 RSS，留空依靠 Jina 强读
-        }
-    ]
-    
-    all_keywords = []
-    
-    for source in sources:
-        # 传入 search_tool 用于 Tavily 兜底
-        content = _fetch_with_fallback(
-            source["primary"], 
-            source["backup"], 
+    try:
+        return _fetch_with_fallback(
+            source["primary"],
+            source["backup"],
             source["name"],
             search_tool
         )
+    except Exception as e:
+        log_print(f"      ⚠️ [{source['name']}] 抓取异常: {e}")
+        return None
+
+
+def fetch_dynamic_trends(
+    client: OpenAI,
+    search_tool: Optional["WebSearchTool"] = None
+) -> List[str]:
+    """
+    从热榜网站并发抓取实时关键词（三级容错机制）
+    1. Jina Primary -> 2. Jina Backup (RSS) -> 3. Tavily Search
+    
+    使用 ThreadPoolExecutor 实现多源并发，显著提升采集效率。
+    单个源的超时/失败不会阻塞其他源。
+    """
+    log_print("   🌐 [热榜抓取] 从全网热榜获取实时趋势 (并发模式)...")
+    
+    # 数据源配置已移至 settings_data.py
+    sources = TREND_SOURCES
+    
+    # ===== Phase 1: 并发抓取所有源 =====
+    source_contents: Dict[str, Optional[str]] = {}
+    
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_FETCHES) as executor:
+        future_to_source = {
+            executor.submit(_fetch_single_source, src, search_tool): src
+            for src in sources
+        }
+        
+        for future in as_completed(future_to_source):
+            src = future_to_source[future]
+            try:
+                content = future.result(timeout=FETCH_TIMEOUT_SECONDS)
+                source_contents[src["name"]] = content
+            except Exception as e:
+                log_print(f"      ⚠️ [{src['name']}] 并发任务异常: {e}")
+                source_contents[src["name"]] = None
+    
+    log_print(f"   📊 抓取完成: {sum(1 for v in source_contents.values() if v)}/{len(sources)} 个源成功")
+    
+    # ===== Phase 2: 串行提取关键词（LLM 调用不宜过度并发） =====
+    all_keywords: List[str] = []
+    
+    for src in sources:
+        content = source_contents.get(src["name"])
         if content:
-            # 对每个源单独提取关键词（带降噪 Prompt）
             keywords = _extract_keywords_from_single_source(
-                client, 
-                content, 
-                source["name"], 
-                source["tag"]
+                client,
+                content,
+                src["name"],
+                src["tag"]
             )
             all_keywords.extend(keywords)
     
     if not all_keywords:
-        print("      ⚠️ 所有热榜源提取关键词失败，返回空列表")
+        log_print("      ⚠️ 所有热榜源提取关键词失败，返回空列表")
         return []
     
     # 去重并限制数量
     unique_keywords = list(dict.fromkeys(all_keywords))[:10]
-    print(f"   🔥 [热榜汇总] 实时关键词: {unique_keywords}")
+    log_print(f"   🔥 [热榜汇总] 实时关键词: {unique_keywords}")
     return unique_keywords
 
 
-def _fetch_with_fallback(primary_url, backup_url, source_name, search_tool=None):
+def _fetch_with_fallback(
+    primary_url: str,
+    backup_url: str,
+    source_name: str,
+    search_tool: Optional["WebSearchTool"] = None
+) -> Optional[str]:
     """
     三级获取策略：Jina Primary -> Jina Backup -> Tavily Search
     """
@@ -280,28 +285,28 @@ def _fetch_with_fallback(primary_url, backup_url, source_name, search_tool=None)
     
     # 2. 尝试 Jina Backup (RSS)
     if backup_url:
-        print(f"      🔄 [{source_name}] Primary 失败，尝试 Backup (RSS)...")
+        log_print(f"      🔄 [{source_name}] Primary 失败，尝试 Backup (RSS)...")
         content = _fetch_via_jina(jina_base + backup_url, source_name, "backup")
         if content and len(content) >= 500:
             return content
 
     # 3. 尝试 Tavily 终极救援
     if search_tool and search_tool.enabled:
-        print(f"      🛡️ [{source_name}] 启用 Tavily 终极救援...")
+        log_print(f"      🛡️ [{source_name}] 启用 Tavily 终极救援...")
         # 构造搜索词
         query = f"{source_name} 热门 AI 科技内容 {datetime.now().strftime('%Y-%m-%d')}"
         results = search_tool.search(query, max_results=3, days=3)
         if results:
             # 拼接 Tavily 的搜索结果作为伪造的"网页内容"
             combined_text = "\n".join([f"Title: {r['title']}\nSnippet: {r['body']}" for r in results])
-            print(f"      ✅ [{source_name}] Tavily 救援成功: 抓取 {len(results)} 条结果")
+            log_print(f"      ✅ [{source_name}] Tavily 救援成功: 抓取 {len(results)} 条结果")
             return combined_text
             
-    print(f"      ❌ [{source_name}] 所有通道均失败")
+    log_print(f"      ❌ [{source_name}] 所有通道均失败")
     return None
 
 
-def _fetch_via_jina(url, source_name, url_type):
+def _fetch_via_jina(url: str, source_name: str, url_type: str) -> Optional[str]:
     """
     通过 Jina Reader API 获取网页内容
     """
@@ -312,29 +317,38 @@ def _fetch_via_jina(url, source_name, url_type):
             "x-no-cache": "true"  # 强制 Jina Reader 抓取最新页面，不返回缓存
         }
         with httpx.Client(proxy=PROXY_URL, timeout=30) as client:
-            resp = client.get(url, headers=headers)
+            @retryable
+            def _get():
+                return client.get(url, headers=headers)
+
+            resp = _get()
             
             if resp.status_code != 200:
-                print(f"      ⚠️ [{source_name}] {url_type} 状态码: {resp.status_code}")
+                log_print(f"      ⚠️ [{source_name}] {url_type} 状态码: {resp.status_code}")
                 return None
             
             content = resp.text
             if len(content) < 500:
-                print(f"      ⚠️ [{source_name}] {url_type} 内容过短: {len(content)} 字符")
+                log_print(f"      ⚠️ [{source_name}] {url_type} 内容过短: {len(content)} 字符")
                 return None
             
-            print(f"      ✅ [{source_name}] {url_type} 成功: {len(content)} 字符")
+            log_print(f"      ✅ [{source_name}] {url_type} 成功: {len(content)} 字符")
             return content[:8000]  # 限制长度，避免 token 过多
             
     except httpx.TimeoutException:
-        print(f"      ⚠️ [{source_name}] {url_type} 超时")
+        log_print(f"      ⚠️ [{source_name}] {url_type} 超时")
         return None
     except Exception as e:
-        print(f"      ⚠️ [{source_name}] {url_type} 异常: {e}")
+        log_print(f"      ⚠️ [{source_name}] {url_type} 异常: {e}")
         return None
 
 
-def _extract_keywords_from_single_source(client, content, name, tag):
+def _extract_keywords_from_single_source(
+    client: OpenAI,
+    content: str,
+    name: str,
+    tag: str
+) -> List[str]:
     """
     使用 LLM 从单个热榜源中提取关键词（带严格降噪过滤）
     """
@@ -366,19 +380,23 @@ def _extract_keywords_from_single_source(client, content, name, tag):
 """
     
     try:
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": "你是一个敏锐的技术趋势捕手，擅长从杂乱的网页内容中提取有价值的技术关键词，并过滤掉无关的娱乐八卦。"},
-                {"role": "user", "content": f"【{name} 热榜内容】\n{content_truncated}\n\n{prompt}"}
-            ],
-            temperature=0.2
-        )
+        @retryable
+        def _chat_create():
+            return client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": "你是一个敏锐的技术趋势捕手，擅长从杂乱的网页内容中提取有价值的技术关键词，并过滤掉无关的娱乐八卦。"},
+                    {"role": "user", "content": f"【{name} 热榜内容】\n{content_truncated}\n\n{prompt}"}
+                ],
+                temperature=0.2
+            )
+
+        response = _chat_create()
         result = response.choices[0].message.content.strip()
         
         # 处理 NONE 情况
         if result.upper() == "NONE" or "NONE" in result.upper():
-            print(f"      ⏭️ [{name}] 无相关技术内容，跳过")
+            log_print(f"      ⏭️ [{name}] 无相关技术内容，跳过")
             return []
         
         # 清洗并返回
@@ -386,15 +404,15 @@ def _extract_keywords_from_single_source(client, content, name, tag):
         keywords = keywords[:3]  # 每个源最多3个
         
         if keywords:
-            print(f"      📌 [{name}] 提取: {keywords}")
+            log_print(f"      📌 [{name}] 提取: {keywords}")
         return keywords
         
     except Exception as e:
-        print(f"      ⚠️ [{name}] 关键词提取失败: {e}")
+        log_print(f"      ⚠️ [{name}] 关键词提取失败: {e}")
         return []
 
 
-def extract_hot_entities(client, search_results):
+def extract_hot_entities(client: OpenAI, search_results: List[Dict[str, Any]]) -> List[str]:
     """从搜索结果中提取 2-3 个热门技术名词"""
     if not search_results: return []
     
@@ -407,25 +425,29 @@ def extract_hot_entities(client, search_results):
     3. 输出格式：用英文逗号分隔，不要其他废话。
     """
     try:
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": "你是一个敏锐的技术趋势捕手。"},
-                {"role": "user", "content": f"【新闻标题列表】\n{text}\n\n{prompt}"}
-            ],
-            temperature=0.1
-        )
+        @retryable
+        def _chat_create():
+            return client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": "你是一个敏锐的技术趋势捕手。"},
+                    {"role": "user", "content": f"【新闻标题列表】\n{text}\n\n{prompt}"}
+                ],
+                temperature=0.1
+            )
+
+        response = _chat_create()
         content = response.choices[0].message.content.strip()
         # 简单清理
         entities = [e.strip() for e in content.split(',') if e.strip() and len(e.strip()) < 20]
         return entities[:3]
     except Exception as e:
-        print(f"      ⚠️ 热点提取失败: {e}")
+        log_print(f"      ⚠️ 热点提取失败: {e}")
         return []
 
 # ================= 核心逻辑 =================
 
-def get_plan_prompt(history_text="", directed_topic=None):
+def get_plan_prompt(history_text: str = "", directed_topic: Optional[str] = None) -> str:
     """动态生成规划提示词，注入当前日期、历史记录和用户意图"""
     today = datetime.now().strftime('%Y-%m-%d')
     
@@ -480,41 +502,39 @@ def get_plan_prompt(history_text="", directed_topic=None):
 # 保留历史兼容性
 PLAN_PROMPT = get_plan_prompt()
 
-def step1_broad_scan_and_plan(client, search_tool, directed_topic=None):
+def step1_broad_scan_and_plan(
+    client: OpenAI,
+    search_tool: "WebSearchTool",
+    directed_topic: Optional[str] = None
+) -> List[Dict[str, str]]:
     """
     Step 1: 广域价值扫描 (心理学三路策略 + 全网雷达)
     混合模式：如果传入 directed_topic，将其作为 A 路核心，同时保留 B/C 路随机探索
     """
-    print(f"\n📡 [Step 1] 广域价值扫描 (策略: {CURRENT_CONFIG['name']})...")
+    log_print(f"\n📡 [Step 1] 广域价值扫描 (策略: {CURRENT_CONFIG['name']})...")
     if directed_topic:
-        print(f"   🎯 [混合模式] 核心主题: 「{directed_topic}」 + 全网随机扫描")
+        log_print(f"   🎯 [混合模式] 核心主题: 「{directed_topic}」 + 全网随机扫描")
     
-    pre_scan_results = []
+    pre_scan_results: List[Dict[str, Any]] = []
     
     # === Phase 0: 全网雷达 (Global Radar) ===
     # 破除信息茧房，主动嗅探不在 WATCHLIST 里的新黑马
-    print(f"   🌑 [Phase 0] 全网雷达扫描 (发现新物种)...")
-    radar_queries = [
-        "site:reddit.com/r/LocalLLaMA AI news today", # 硬核社区
-        "site:news.ycombinator.com AI launch",        # 硅谷风向标
-        "site:huggingface.co/papers trending",        # 学术前沿
-        "AI technology breaking news today"           # 大众新闻
-    ]
-    for q in radar_queries:
+    log_print(f"   🌑 [Phase 0] 全网雷达扫描 (发现新物种)...")
+    for q in RADAR_QUERIES:
         res = search_tool.search(q, max_results=2, topic="news", days=1) # 只看24小时内
         pre_scan_results.extend(res)
 
     # === Phase 0.5: 热点提取 ===
     hot_entities = extract_hot_entities(client, pre_scan_results)
     if hot_entities:
-        print(f"   🔥 [雷达锁定] 突发热点: {hot_entities}")
+        log_print(f"   🔥 [雷达锁定] 突发热点: {hot_entities}")
 
     # === Phase 0.6: 热榜动态趋势 ===
     fresh_keywords = []
     try:
         fresh_keywords = fetch_dynamic_trends(client, search_tool)
     except Exception as e:
-        print(f"      ⚠️ 热榜抓取异常，跳过: {e}")
+        log_print(f"      ⚠️ 热榜抓取异常，跳过: {e}")
     
     # === A路: 顶流锚点 (Watchlist + Hotspots + Fresh) ===
     if directed_topic:
@@ -538,7 +558,7 @@ def step1_broad_scan_and_plan(client, search_tool, directed_topic=None):
                 targets.insert(0, h)
         targets = targets[:6]
 
-    print(f"   🎯 [A路-锚点] 扫描目标: {targets}")
+    log_print(f"   🎯 [A路-锚点] 扫描目标: {targets}")
     for t in targets:
         # 激活僵尸关键词：同时搜"隐藏功能"和"最新更新"
         queries = [
@@ -550,18 +570,13 @@ def step1_broad_scan_and_plan(client, search_tool, directed_topic=None):
             pre_scan_results.extend(res)
         
     # === B路: 随机收益场景 (Life Hack) ===
-    print(f"   ⚡ [B路-收益] 扫描效率神器...")
-    efficiency_keywords = [
-        "AI 整理很多文件", "AI 自动写周报", "AI 读长论文", "AI 做漂亮的PPT", 
-        "Excel AI 公式", "Notion 替代品", "Obsidian 插件", "浏览器 AI 插件",
-        "自动化工作流 Zapier", "AI 剪辑视频", "AI 录音转文字 免费"
-    ]
-    selected_efficiency = random.sample(efficiency_keywords, 3)
+    log_print(f"   ⚡ [B路-收益] 扫描效率神器...")
+    selected_efficiency = random.sample(EFFICIENCY_KEYWORDS, 3)
     if directed_topic:
         # 混合模式：加入定向主题的效率场景
         selected_efficiency.insert(0, f"{directed_topic} 效率神器")
         
-    print(f"      🎲 随机抽取: {selected_efficiency}")
+    log_print(f"      🎲 随机抽取: {selected_efficiency}")
     for kw in selected_efficiency:
         # B路: 强制追加高质量信源，过滤 SEO 垃圾
         q = f"{kw} 推荐 site:sspai.com OR site:36kr.com OR site:v2ex.com OR site:zhihu.com"
@@ -569,17 +584,13 @@ def step1_broad_scan_and_plan(client, search_tool, directed_topic=None):
         pre_scan_results.extend(res)
         
     # === C路: 随机避坑场景 (Pain Points) ===
-    print(f"   🛡️ [C路-损失] 扫描避坑/吐槽...")
-    pain_keywords = [
-        "AI 写作 查重", "AI 幻觉 翻车", "收费 AI 避坑", "AI 生成图片 丑",
-        "DeepSeek 报错", "ChatGPT 封号", "Cursor 太贵", "Copilot 不好用"
-    ]
-    selected_pain = random.sample(pain_keywords, 3)
+    log_print(f"   🛡️ [C路-损失] 扫描避坑/吐槽...")
+    selected_pain = random.sample(PAIN_KEYWORDS, 3)
     if directed_topic:
         # 混合模式：加入定向主题的避坑场景
         selected_pain.insert(0, f"{directed_topic} 避坑 吐槽")
         
-    print(f"      🎲 随机抽取: {selected_pain}")
+    log_print(f"      🎲 随机抽取: {selected_pain}")
     for kw in selected_pain:
         # C路: 强制追加社区信源
         q = f"{kw} 吐槽 避坑 site:v2ex.com OR site:reddit.com OR site:zhihu.com"
@@ -589,7 +600,7 @@ def step1_broad_scan_and_plan(client, search_tool, directed_topic=None):
     pre_scan_text = "\n".join([f"- {r['title']}: {r['body'][:80]}" for r in pre_scan_results])
     
     # 2. 智能筛选与规划
-    print(f"   📝 情报聚合完毕，DeepSeek 正在应用心理学策略选题...")
+    log_print(f"   📝 情报聚合完毕，DeepSeek 正在应用心理学策略选题...")
     
     # 加载历史记录
     history = load_history()
@@ -597,15 +608,19 @@ def step1_broad_scan_and_plan(client, search_tool, directed_topic=None):
     if not history_text: history_text = "无（这是第一篇）"
 
     try:
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": get_plan_prompt(history_text, directed_topic)},
-                {"role": "user", "content": f"【混合情报池】\n{pre_scan_text}"}
-            ],
-            temperature=0.7,
-            response_format={ "type": "json_object" }
-        )
+        @retryable
+        def _chat_create():
+            return client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": get_plan_prompt(history_text, directed_topic)},
+                    {"role": "user", "content": f"【混合情报池】\n{pre_scan_text}"}
+                ],
+                temperature=0.7,
+                response_format={ "type": "json_object" }
+            )
+
+        response = _chat_create()
         content = response.choices[0].message.content
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0]
@@ -614,13 +629,13 @@ def step1_broad_scan_and_plan(client, search_tool, directed_topic=None):
         if isinstance(search_plan, dict) and "events" in search_plan:
             search_plan = search_plan["events"]
             
-        print(f"   🧠 选题方向已锁定: {[i['event'] + '-' + i['angle'] for i in search_plan]}\n")
+        log_print(f"   🧠 选题方向已锁定: {[i['event'] + '-' + i['angle'] for i in search_plan]}\n")
         return search_plan
     except Exception as e:
-        print(f"   ❌ 规划失败: {e}")
+        log_print(f"   ❌ 规划失败: {e}")
         return [{"event": "DeepSeek", "angle": "避坑", "news_query": "DeepSeek V3", "social_query": "DeepSeek 幻觉"}]
 
-def _clean_text(text, max_len=100):
+def _clean_text(text: Optional[str], max_len: int = 100) -> str:
     """清洗文本：移除多余空白、HTML标签、截断长度"""
     if not text:
         return ""
@@ -634,12 +649,16 @@ def _clean_text(text, max_len=100):
         text = text[:max_len] + "..."
     return text
 
-def step2_deep_scan(search_plan, search_tool, directed_topic=None):
+def step2_deep_scan(
+    search_plan: List[Dict[str, str]],
+    search_tool: "WebSearchTool",
+    directed_topic: Optional[str] = None
+) -> str:
     """
     Step 2: 深度验证 (重社交/痛点)
     输出格式：清晰的 Markdown 列表，包含摘要和来源 URL
     """
-    print("📡 [Step 2] 启动深度价值验证...\n")
+    log_print("📡 [Step 2] 启动深度价值验证...\n")
     all_results = []
     
     w_news = CURRENT_CONFIG['weights']['news']
@@ -664,12 +683,12 @@ def step2_deep_scan(search_plan, search_tool, directed_topic=None):
             social_max_results = 4 if is_core else 2
             news_max_results = 2 if is_core else 1
         
-        print(f"   🔍 正在深挖: 【{event}】 ({angle}方向)")
+        log_print(f"   🔍 正在深挖: 【{event}】 ({angle}方向)")
         event_data = [f"### 🎯 选题: {event} ({angle})"]
         
         # 1. 社交/痛点搜索 (核心)
         if social_q:
-            print(f"      💬 社交舆情 (权重 {w_social}): {social_q}")
+            log_print(f"      💬 社交舆情 (权重 {w_social}): {social_q}")
             full_social_q = f"{social_q} site:mp.weixin.qq.com OR site:xiaohongshu.com OR site:zhihu.com OR site:bilibili.com"
             res = search_tool.search(full_social_q, max_results=social_max_results)
             if res:
@@ -685,7 +704,7 @@ def step2_deep_scan(search_plan, search_tool, directed_topic=None):
                 
         # 2. 官方验证 (辅助)
         if news_q:
-            print(f"      🔥 官方验证 (权重 {w_news}): {news_q}")
+            log_print(f"      🔥 官方验证 (权重 {w_news}): {news_q}")
             res = search_tool.search(news_q, max_results=news_max_results)
             if res:
                 event_data.append(f"\n**📰 官方信息** ({news_q})")
@@ -698,19 +717,24 @@ def step2_deep_scan(search_plan, search_tool, directed_topic=None):
                         event_data.append(f"- {title}")
         
         all_results.append("\n".join(event_data))
-        print("")
+        log_print("")
         time.sleep(1)
 
     # GitHub 补充 (Weekly)
-    print(f"   💻 GitHub Weekly Trending...")
+    log_print(f"   💻 GitHub Weekly Trending...")
     github_res = get_github_trending()
     all_results.append("### 💻 GitHub Weekly Trending\n" + "\n".join(github_res))
     
     return "\n\n---\n\n".join(all_results)
 
-def step3_final_decision(scan_data, client, history_text="无（这是第一篇）", directed_topic=None):
+def step3_final_decision(
+    scan_data: str,
+    client: OpenAI,
+    history_text: str = "无（这是第一篇）",
+    directed_topic: Optional[str] = None
+) -> str:
     """Step 3: 决策（带去重和新词扶持 + 用户意图加权）"""
-    print("\n" + "="*50 + "\n📝 DeepSeek 主编审核中...\n" + "="*50)
+    log_print("\n" + "="*50 + "\n📝 DeepSeek 主编审核中...\n" + "="*50)
     
     # 构造用户意图提示
     user_intent_prompt = ""
@@ -741,25 +765,29 @@ def step3_final_decision(scan_data, client, history_text="无（这是第一篇�
     
     try:
         # 单次扫描用 chat 模型（快、便宜），综合决策才用 reasoner
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": f"【深度验证情报】\n{scan_data}"}
-            ],
-            stream=True
-        )
-        
-        print("\n" + "="*20 + " 选题报告 " + "="*20 + "\n")
+        @retryable
+        def _chat_create():
+            return client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": f"【深度验证情报】\n{scan_data}"}
+                ],
+                stream=True
+            )
+
+        response = _chat_create()
+
+        log_print("\n" + "="*20 + " 选题报告 " + "="*20 + "\n")
         collected = []
         for chunk in response:
             if chunk.choices[0].delta.content:
                 c = chunk.choices[0].delta.content
-                print(c, end="", flush=True)
+                log_print(c, end="", flush=True)
                 collected.append(c)
         return "".join(collected)
     except Exception as e:
-        print(f"❌ 决策失败: {e}")
+        log_print(f"❌ 决策失败: {e}")
         return f"失败: {e}"
 
 EDITOR_PROMPT = """
@@ -788,36 +816,36 @@ EDITOR_PROMPT = """
 告诉我不写会后悔的那个 (获得感最强的)。
 """
 
-def auto_init_workflow():
+def auto_init_workflow() -> None:
     """自动初始化后续工作流文件夹和文件"""
-    print("\n⚙️ 正在初始化后续工作流...")
+    log_print("\n⚙️ 正在初始化后续工作流...")
     
     # 1. 预创建所有阶段文件夹
     from config import get_stage_dir, get_research_notes_file
     stages = ["research", "drafts", "publish", "assets"]
     for stage in stages:
         path = get_stage_dir(stage)
-        print(f"   📂 目录就绪: {path}")
+        log_print(f"   📂 目录就绪: {path}")
         
     # 2. 创建空白研究笔记
     notes_file = get_research_notes_file()
     if not os.path.exists(notes_file):
         with open(notes_file, "w", encoding="utf-8") as f:
             f.write("# 研究笔记\n\n说明：此文件通常由 `python run.py research` 自动生成。\n如需人工补充，请在此处追加你的关键发现与引用链接。\n")
-        print(f"   📄 笔记文件已创建: {notes_file}")
+        log_print(f"   📄 笔记文件已创建: {notes_file}")
     
     # 3. 提示下一步
-    print("\n💡 下一步：")
-    print("   - 可继续运行 hunt 获取更多选题")
-    print("   - 或运行 `python run.py final` 综合所有报告，获得 3 个提示词")
+    log_print("\n💡 下一步：")
+    log_print("   - 可继续运行 hunt 获取更多选题")
+    log_print("   - 或运行 `python run.py final` 综合所有报告，获得 3 个提示词")
 
-def save_report(raw_data, analysis, directed_topic=None):
+def save_report(raw_data: str, analysis: str, directed_topic: Optional[str] = None) -> None:
     filename = get_topic_report_file()
     mode_info = f"定向搜索: {directed_topic}" if directed_topic else CURRENT_CONFIG['name']
     content = f"# 🚀 选题雷达报告 v4.0 ({mode_info})\n\n**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n**策略**: {CURRENT_CONFIG['strategy']}\n\n## 深度验证情报\n\n{raw_data}\n\n---\n\n## 选题分析\n\n{analysis}"
     with open(filename, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"\n\n📁 报告已保存: {filename}")
+    log_print(f"\n\n📁 报告已保存: {filename}")
     
     # 保存后自动初始化工作流
     auto_init_workflow()
@@ -829,7 +857,7 @@ def main(topic=None):
         topic: 可选，指定搜索主题。若提供，将启用“混合优先级”：主题优先，但仍保留全网随机探索以捕捉突发热点
     """
     mode_text = f"定向搜索: {topic}" if topic else "全网雷达"
-    print("\n" + "="*60 + f"\n🚀 选题雷达 v4.0 ({mode_text}) - 王往AI\n" + "="*60 + "\n")
+    log_print("\n" + "="*60 + f"\n🚀 选题雷达 v4.0 ({mode_text}) - 王往AI\n" + "="*60 + "\n")
     
     search_tool = WebSearchTool()
     
@@ -853,36 +881,36 @@ def main(topic=None):
         # 4. 保存
         save_report(raw_data, analysis, directed_topic=topic)
     
-    print("\n✅ 选题雷达完成！")
+    log_print("\n✅ 选题雷达完成！")
 
 def final_summary():
     """综合当天所有报告，给出最终选题推荐和三个提示词"""
     import glob
     from config import get_today_dir
     
-    print("\n" + "="*60)
-    print("🎯 综合选题决策 - 整合今日所有报告")
-    print("="*60 + "\n")
+    log_print("\n" + "="*60)
+    log_print("🎯 综合选题决策 - 整合今日所有报告")
+    log_print("="*60 + "\n")
     
     # 1. 读取当天所有报告
     topics_dir = os.path.join(get_today_dir(), "1_topics")
     reports = glob.glob(os.path.join(topics_dir, "report_*.md"))
     
     if not reports:
-        print("❌ 今日暂无报告，请先运行 `python run.py hunt`")
+        log_print("❌ 今日暂无报告，请先运行 `python run.py hunt`")
         return
     
-    print(f"📊 找到 {len(reports)} 份报告：")
+    log_print(f"📊 找到 {len(reports)} 份报告：")
     all_content = []
     for r in sorted(reports):
-        print(f"   📄 {os.path.basename(r)}")
+        log_print(f"   📄 {os.path.basename(r)}")
         with open(r, "r", encoding="utf-8") as f:
             all_content.append(f"=== {os.path.basename(r)} ===\n{f.read()}")
     
     combined = "\n\n".join(all_content)
     
     # 2. DeepSeek 综合分析
-    print("\n🧠 DeepSeek 正在综合分析...")
+    log_print("\n🧠 DeepSeek 正在综合分析...")
     
     FINAL_PROMPT = """
 你是"王往AI"，一个擅长从多份情报中提炼核心选题的公众号主编。
@@ -940,24 +968,28 @@ def final_summary():
         client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL, http_client=http_client)
         
         try:
-            response = client.chat.completions.create(
-                model="deepseek-reasoner",
-                messages=[
-                    {"role": "system", "content": FINAL_PROMPT},
-                    {"role": "user", "content": f"以下是今日的所有选题报告，请综合分析后给出最终推荐：\n\n{combined}"}
-                ],
-                stream=True
-            )
+            @retryable
+            def _chat_create():
+                return client.chat.completions.create(
+                    model="deepseek-reasoner",
+                    messages=[
+                        {"role": "system", "content": FINAL_PROMPT},
+                        {"role": "user", "content": f"以下是今日的所有选题报告，请综合分析后给出最终推荐：\n\n{combined}"}
+                    ],
+                    stream=True
+                )
+
+            response = _chat_create()
             
-            print("\n" + "="*60)
-            print("🏆 最终选题推荐")
-            print("="*60 + "\n")
+            log_print("\n" + "="*60)
+            log_print("🏆 最终选题推荐")
+            log_print("="*60 + "\n")
             
             collected = []
             for chunk in response:
                 if chunk.choices[0].delta.content:
                     c = chunk.choices[0].delta.content
-                    print(c, end="", flush=True)
+                    log_print(c, end="", flush=True)
                     collected.append(c)
             
             # 保存综合报告
@@ -966,7 +998,7 @@ def final_summary():
             with open(final_report, "w", encoding="utf-8") as f:
                 f.write(f"# 🏆 今日最终选题决策\n\n**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n**综合报告数**: {len(reports)}\n\n{content_str}")
             
-            print(f"\n\n📁 综合报告已保存: {final_report}")
+            log_print(f"\n\n📁 综合报告已保存: {final_report}")
 
             # === 自动更新历史记录 (Memory Update) ===
             try:
@@ -996,18 +1028,18 @@ def final_summary():
                     if lines:
                         fallback_title = lines[0][:50]  # 取前50字符
                         save_topic_to_history(fallback_title, "综合决策")
-                        print(f"⚠️ 使用 Fallback 标题: {fallback_title}")
+                        log_print(f"⚠️ 使用 Fallback 标题: {fallback_title}")
                     else:
-                        print("⚠️ 警告: 无法从报告中提取最终选题标题，历史记录未更新。")
-                        print(f"   调试信息: 内容前200字 -> {content_str[:200].replace(chr(10), ' ')}")
+                        log_print("⚠️ 警告: 无法从报告中提取最终选题标题，历史记录未更新。")
+                        log_print(f"   调试信息: 内容前200字 -> {content_str[:200].replace(chr(10), ' ')}")
             
             except Exception as e:
-                 print(f"⚠️ 历史记录更新失败: {e}")
+                 log_print(f"⚠️ 历史记录更新失败: {e}")
             
         except Exception as e:
-            print(f"❌ 综合分析失败: {e}")
+            log_print(f"❌ 综合分析失败: {e}")
 
-    print("\n✅ 综合选题完成！")
+    log_print("\n✅ 综合选题完成！")
 
 if __name__ == "__main__":
     main()

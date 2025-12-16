@@ -22,6 +22,9 @@ lxml>=5.0.0
 
 # === 基础工具 ===
 
+tenacity>=8.2.0
+colorlog>=6.8.0
+
 
 # === 安装命令 ===
 # pip install -r requirements.txt

@@ -20,6 +20,9 @@ import httpx
 from openai import OpenAI
 import config
 
+
+logger = config.get_logger(__name__)
+
 # ================= 系统提示词 =================
 
 SYSTEM_PROMPT = """## Role
@@ -72,85 +75,92 @@ def refine_article(instruction: str, date: str = None):
     
     draft_file = config.get_draft_file()
     final_file = config.get_final_file()
-    
-    print("\n" + "=" * 60)
-    print("✨ 润色智能体 - 定向修改")
-    print("=" * 60)
-    print(f"\n📁 今日工作目录: {config.get_today_dir()}")
+
+    logger.info("%s", "=" * 60)
+    logger.info("✨ 润色智能体 - 定向修改")
+    logger.info("%s", "=" * 60)
+    logger.info("📁 今日工作目录: %s", config.get_today_dir())
     
     # 读取草稿
-    print(f"\n📖 读取 {draft_file}...")
+    logger.info("📖 读取 %s...", draft_file)
     if not os.path.exists(draft_file):
-        print(f"❌ 找不到草稿文件: {draft_file}")
-        print("   请先运行 python run.py draft 生成草稿")
+        logger.error("❌ 找不到草稿文件: %s", draft_file)
+        logger.error("   请先运行 python run.py draft 生成草稿")
         return
     
     with open(draft_file, "r", encoding="utf-8") as f:
         content = f.read()
     
     if not content.strip():
-        print("❌ 草稿文件为空")
+        logger.error("❌ 草稿文件为空")
         return
-    
-    print(f"   ✓ 共 {len(content)} 字符")
-    print(f"\n📝 修改指令: {instruction}")
+
+    logger.info("✓ 共 %s 字符", len(content))
+    logger.info("📝 修改指令: %s", instruction)
     
     # 构建 User Prompt
     user_prompt = f"【修改指令】：{instruction}\n\n【文章原稿】：\n{content}"
     
     # 调用 DeepSeek API
-    print("\n🚀 调用 DeepSeek Reasoner...")
-    print("\n" + "=" * 20 + " 润色中 " + "=" * 20 + "\n")
-    
-    http_client = httpx.Client(proxy=config.PROXY_URL, timeout=getattr(config, 'REQUEST_TIMEOUT', 120))
-    client = OpenAI(
-        api_key=config.DEEPSEEK_API_KEY,
-        base_url=config.DEEPSEEK_BASE_URL,
-        http_client=http_client
-    )
-    
-    try:
-        response = client.chat.completions.create(
-            model="deepseek-reasoner",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt}
-            ],
-            stream=True
+
+    logger.info("🚀 调用 DeepSeek Reasoner...")
+    logger.info("%s", "=" * 20 + " 润色中 " + "=" * 20)
+
+    with httpx.Client(proxy=config.PROXY_URL, timeout=getattr(config, 'REQUEST_TIMEOUT', 120)) as http_client:
+        client = OpenAI(
+            api_key=config.DEEPSEEK_API_KEY,
+            base_url=config.DEEPSEEK_BASE_URL,
+            http_client=http_client
         )
-        
-        # 流式输出
-        full_content = ""
-        for chunk in response:
-            # 跳过 reasoning_content
-            if hasattr(chunk.choices[0].delta, 'reasoning_content'):
-                reasoning = chunk.choices[0].delta.reasoning_content
-                if reasoning:
-                    continue  # 不显示推理过程，保持输出简洁
-            
-            # 输出正文内容
-            if chunk.choices[0].delta.content:
-                text = chunk.choices[0].delta.content
-                print(text, end="", flush=True)
-                full_content += text
-        
-        print("\n\n" + "=" * 50)
-        
-        # 保存到 final.md
-        os.makedirs(os.path.dirname(final_file), exist_ok=True)
-        with open(final_file, "w", encoding="utf-8") as f:
-            f.write(full_content)
-        
-        print(f"\n✅ 定稿已保存: {final_file}")
-        print(f"📋 原稿保留在: {draft_file}")
-        print("\n📌 下一步：")
-        print("   1. 检查 final.md，确认修改效果")
-        print("   2. 如需继续修改，再次运行 python run.py refine \"新的指令\"")
-        print("   3. 满意后运行 python run.py format 进行排版")
-        
-    except Exception as e:
-        print(f"\n❌ API 调用失败: {e}")
-        raise
+
+        try:
+            @config.retryable
+            def _chat_create():
+                return client.chat.completions.create(
+                    model="deepseek-reasoner",
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    stream=True
+                )
+
+            response = _chat_create()
+
+            # 流式输出
+            full_content = ""
+            for chunk in response:
+                # 跳过 reasoning_content
+                if hasattr(chunk.choices[0].delta, 'reasoning_content'):
+                    reasoning = chunk.choices[0].delta.reasoning_content
+                    if reasoning:
+                        continue  # 不显示推理过程，保持输出简洁
+
+                # 输出正文内容
+                if chunk.choices[0].delta.content:
+                    text = chunk.choices[0].delta.content
+                    sys.stdout.write(text)
+                    sys.stdout.flush()
+                    full_content += text
+
+            sys.stdout.write("\n\n" + "=" * 50 + "\n")
+            sys.stdout.flush()
+
+            # 保存到 final.md
+            os.makedirs(os.path.dirname(final_file), exist_ok=True)
+            with open(final_file, "w", encoding="utf-8") as f:
+                f.write(full_content)
+
+            logger.info("✅ 定稿已保存: %s", final_file)
+            logger.info("📋 原稿保留在: %s", draft_file)
+            logger.info("📌 下一步：")
+            logger.info("   1. 检查 final.md，确认修改效果")
+            logger.info("   2. 如需继续修改，再次运行 python run.py refine \"新的指令\"")
+            logger.info("   3. 满意后运行 python run.py format 进行排版")
+
+        except Exception as e:
+            logger.error("❌ API 调用失败: %s", e)
+            raise
 
 
 def main():
@@ -161,7 +171,7 @@ def main():
         instruction = input("请输入修改意见: ").strip()
     
     if not instruction:
-        print("❌ 请提供修改指令")
+        logger.error("❌ 请提供修改指令")
         return
     
     refine_article(instruction)

@@ -10,11 +10,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import httpx
 from openai import OpenAI
-from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, PROXY_URL, REQUEST_TIMEOUT, get_research_notes_file, get_draft_file, get_today_dir, get_stage_dir
+from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, PROXY_URL, REQUEST_TIMEOUT, get_research_notes_file, get_draft_file, get_today_dir, get_stage_dir, get_logger, retryable
 
 from datetime import datetime
 
-def get_system_prompt():
+
+logger = get_logger(__name__)
+
+def get_system_prompt(topic: str = None, strategic_intent: str = None):
     """
     动态生成系统提示词 (注入反套壳/专家人设约束)
     包含：
@@ -23,6 +26,8 @@ def get_system_prompt():
     3. 绝对禁忌 (红线)
     """
     today = datetime.now().strftime('%Y年%m月')
+    strategic_block = f"\n\n## 🎯 最高指令：选题策划书（必须逐条执行）\n{strategic_intent}\n" if strategic_intent else ""
+    topic_block = f"\n\n## 文章标题约束\n文章标题必须使用：{topic}\n" if topic else ""
     return f"""
 你叫"王往AI"。热爱新兴技术的探索者，专注 AI 工作流的硬核博主。
 
@@ -48,6 +53,21 @@ def get_system_prompt():
 2. **“高阶玩法”只能是技术流**：
 - ❌ 错误的高阶：推荐买某某会员。
 - ✅ 正确的高阶：使用 DeepSeek 的 **API 接入**、使用 **Ollama 本地部署**、使用 **Python 脚本批量处理**、或者 **多轮提示词迭代策略**。
+3. **严禁推荐 API 中转商/分销商**：如“老张AI / laozhang.ai”、“API2D”等。我们只教用户用 **官方 API** 或 **开源本地模型 (Ollama/vLLM)**。如果为了省钱，请教他们用“开源模型”，而不是“二贩子服务”。
+
+## 战略意图对齐（必须执行）
+你会收到一份“选题策划书（strategic_intent）”，它是本次写作的最高指令：
+- 开头必须回应策划书的“心理锚点”，用 1-2 句话把读者情绪钉住
+- 文章结构必须覆盖策划书的“核心看点”，不得漏项
+- 严禁自由发挥导致偏题：如果研究笔记里有内容不服务于策划书目标，宁可不写
+- 如遇冲突：以“可引用证据”为准，同时在文中点出“与策划书假设不一致”的地方
+{topic_block}{strategic_block}
+
+## 决策指令（聚焦唯一最佳实践）
+当研究笔记中出现多个解决同一问题的工具/路线（例如 VSCode 插件 vs Cursor 原生功能）时：
+- **请选择体验最“原生”、最“顺滑”的一个作为主推**，给出一条从 0 到 1 可复现的最短路径
+- 另一个仅作为备选一句带过，或直接不提
+- 不要做“大拼盘罗列”，你必须给读者“唯一主推款”的明确结论
 
 ## 结构调整指令
 - 在【避坑指南】部分：直接点名“笔灵”、“PaperYY”等工具虽能保留格式，但本质是信息差割韭菜。
@@ -110,56 +130,65 @@ def get_system_prompt():
 
 def read_notes(filepath):
     if not os.path.exists(filepath):
-        print(f"❌ 找不到 {filepath}")
+        logger.error("❌ 找不到 %s", filepath)
         return None
     with open(filepath, "r", encoding="utf-8") as f:
         return f.read()
 
-def generate_draft(notes):
-    print("🚀 调用 DeepSeek Reasoner...")
+def generate_draft(notes, topic: str = None, strategic_intent: str = None):
+    logger.info("🚀 调用 DeepSeek Reasoner...")
     with httpx.Client(proxy=PROXY_URL, timeout=REQUEST_TIMEOUT) as http_client:
         client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL, http_client=http_client)
-        messages = [{"role": "system", "content": get_system_prompt()},
-                    {"role": "user", "content": f"【研究笔记】：\n{notes}"}]
+        messages = [
+            {"role": "system", "content": get_system_prompt(topic=topic, strategic_intent=strategic_intent)},
+            {"role": "user", "content": f"【选题标题】\n{topic or ''}\n\n【选题策划书 / 战略意图（最高指令）】\n{strategic_intent or ''}\n\n【研究笔记】\n{notes}"}
+        ]
         try:
-            response = client.chat.completions.create(model="deepseek-reasoner", messages=messages, stream=True)
-            print("\n" + "="*20 + " 生成中 " + "="*20 + "\n")
+            @retryable
+            def _chat_create():
+                return client.chat.completions.create(model="deepseek-reasoner", messages=messages, stream=True)
+
+            response = _chat_create()
+            logger.info("%s", "="*20 + " 生成中 " + "="*20)
             collected = []
             for chunk in response:
                 if chunk.choices[0].delta.content:
                     c = chunk.choices[0].delta.content
-                    print(c, end="", flush=True)
+                    sys.stdout.write(c)
+                    sys.stdout.flush()
                     collected.append(c)
-            print("\n\n" + "="*50 + "\n")
+            sys.stdout.write("\n\n" + "="*50 + "\n")
+            sys.stdout.flush()
             return "".join(collected)
         except Exception as e:
-            print(f"❌ 生成失败: {e}")
+            logger.error("❌ 生成失败: %s", e)
             return None
 
-def main():
-    print("\n" + "="*60 + "\n✍️ 写作智能体 - 王往AI\n" + "="*60 + "\n")
-    print(f"📁 今日工作目录: {get_today_dir()}\n")
+def main(topic: str = None, strategic_intent: str = None):
+    logger.info("%s", "="*60)
+    logger.info("✍️ 写作智能体 - 王往AI")
+    logger.info("%s", "="*60)
+    logger.info("📁 今日工作目录: %s", get_today_dir())
     
     notes_file = get_research_notes_file()
-    print(f"📖 读取 {notes_file}...")
+    logger.info("📖 读取 %s...", notes_file)
     
     notes = read_notes(notes_file)
     if not notes:
-        print(f"\n💡 请先在以下位置创建研究笔记：")
-        print(f"   {notes_file}")
+        logger.warning("💡 请先在以下位置创建研究笔记：%s", notes_file)
         return
-    print(f"   ✓ 共 {len(notes)} 字符\n")
+    logger.info("✓ 共 %s 字符", len(notes))
     
-    draft = generate_draft(notes)
+    draft = generate_draft(notes, topic=topic, strategic_intent=strategic_intent)
     if draft:
         draft_file = get_draft_file()
         with open(draft_file, "w", encoding="utf-8") as f:
             f.write(draft)
-        print(f"✅ 初稿已保存: {draft_file}")
-        print(f"\n📌 下一步：")
-        print(f"   1. 运行 python run.py todo 查看待补充内容")
-        print(f"   2. 截图保存到 {get_stage_dir('assets')}")
-        print(f"   3. 润色后保存到 {get_stage_dir('publish')}/final.md")
+        logger.info("✅ 初稿已保存: %s", draft_file)
+        logger.info("📌 下一步：")
+        logger.info("   1. 运行 python run.py todo 查看待补充内容")
+        logger.info("   2. 截图保存到 %s", get_stage_dir('assets'))
+        logger.info("   3. 润色后保存到 %s/final.md", get_stage_dir('publish'))
 
 if __name__ == "__main__":
     main()
