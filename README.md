@@ -19,22 +19,19 @@
 
 ```bash
 # 1. 扫描选题 (建议早/中/晚各运行一次)
-python run.py hunt
 
-# 1.1 定向搜索（命题作文 + 自由发挥）
-python run.py hunt -t "手机Agent助手"
+3. **配置环境变量**
+   复制 `.env.example` 为 `.env`，并填入你的 API Key：
+   ```ini
+   DEEPSEEK_API_KEY=sk-xxxxxxxx
+   EXA_API_KEY=xxxxxxxx
+   TAVILY_API_KEY=tvly-xxxxxxxx
+   SILICONFLOW_API_KEY=sk-xxxxxxxx (用于 Flux 绘图)
+   ```
 
-# 2. 综合决策 (每天一次，选出最终选题)
-python run.py final
+## 🚀 快速上手
 
-# 3. 自动研究 + 写作 (全自动)
-python run.py research
-python run.py draft
-
-# 4. 排版 + 发布
-python run.py format
-```
-
+### 全自动模式（一键生成）
 ### 🎯 定向选题说明（-t）
 
 当你使用 `-t` 指定主题时，系统会启用“混合优先级”机制：

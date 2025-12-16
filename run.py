@@ -81,23 +81,37 @@ def run_hunter(topic=None):
 def run_drafter(topic=None, strategic_intent=None):
     from agents.drafter import main
     if topic is None or strategic_intent is None:
-        parsed_topic, _, parsed_intent = _load_final_decision()
-        if topic is None:
-            topic = parsed_topic
-        if strategic_intent is None:
-            strategic_intent = parsed_intent
+        parsed = _load_final_decision()
+        if parsed:
+            if topic is None:
+                topic = parsed.get('topic')
+            if strategic_intent is None:
+                strategic_intent = parsed.get('strategic_summary')
 
     main(topic=topic, strategic_intent=strategic_intent)
 
-def run_formatter():
+def run_formatter(style: str = "green"):
     from agents.formatter import main
-    main()
+    main(style=style)
 
 def run_todo():
     from agents.todo_extractor import main
     main()
 
 def _load_final_decision():
+    """
+    v4.2: 智能解析 FINAL_DECISION.md，提取结构化信息
+    
+    Returns:
+        dict: {
+            'topic': 文章标题,
+            'keywords': 关键词列表,
+            'hook': 一句话卖点,
+            'anchor': 心理锚点,
+            'fast_research': Fast Research 提示词 (用于精准搜索),
+            'strategic_summary': 精简的战略意图摘要 (不含视觉脚本)
+        }
+    """
     from config import get_today_dir
     import os
     import re
@@ -106,60 +120,123 @@ def _load_final_decision():
     final_file = os.path.join(topics_dir, "FINAL_DECISION.md")
 
     if not os.path.exists(final_file):
-        return None, None, None
+        return None
 
     logger.info(f"📄 正在解析: {final_file}")
     with open(final_file, "r", encoding="utf-8") as f:
         content = f.read()
 
-    topic = None
-    queries = None
+    result = {
+        'topic': None,
+        'keywords': [],
+        'hook': None,
+        'anchor': None,
+        'fast_research': None,
+        'strategic_summary': None
+    }
 
+    # 提取标题
     title_match = re.search(r'\*\*标题\*\*[：:]\s*(.+)', content)
     if title_match:
-        topic = title_match.group(1).strip()
-    else:
-        title_match = re.search(r'### 🏆 今日最终选题\s*\n+.*?\*\*标题\*\*[：:]?\s*(.+)', content)
-        if title_match:
-            topic = title_match.group(1).strip()
+        result['topic'] = title_match.group(1).strip()
 
+    # 提取关键词
     keywords_match = re.search(r'\*\*关键词\*\*[：:]\s*(.+)', content)
     if keywords_match:
         keywords_str = keywords_match.group(1).strip()
-        queries = [kw.strip() for kw in re.split(r'[,，、]', keywords_str) if kw.strip()]
+        result['keywords'] = [kw.strip() for kw in re.split(r'[,，、]', keywords_str) if kw.strip()]
 
-    strategic_intent = content.strip() if content else None
-    return topic, queries, strategic_intent
+    # 提取一句话卖点
+    hook_match = re.search(r'\*\*一句话卖点\*\*[：:]\s*(.+)', content)
+    if hook_match:
+        result['hook'] = hook_match.group(1).strip()
+
+    # 提取心理锚点
+    anchor_match = re.search(r'\*\*心理锚点\*\*[：:]\s*(.+)', content)
+    if anchor_match:
+        result['anchor'] = anchor_match.group(1).strip()
+
+    # 提取 Fast Research 提示词（关键！用于精准搜索）
+    fast_research_match = re.search(
+        r'###\s*📡\s*提示词\s*1[：:]?\s*Fast Research.*?```\s*(.*?)```',
+        content, re.DOTALL | re.IGNORECASE
+    )
+    if fast_research_match:
+        result['fast_research'] = fast_research_match.group(1).strip()
+        logger.info("   ✅ 已提取 Fast Research 搜索指引")
+
+    # 构建精简的战略意图摘要（不含视觉脚本）
+    strategic_parts = []
+    if result['topic']:
+        strategic_parts.append(f"**标题**: {result['topic']}")
+    if result['anchor']:
+        strategic_parts.append(f"**心理锚点**: {result['anchor']}")
+    if result['hook']:
+        strategic_parts.append(f"**一句话卖点**: {result['hook']}")
+    if result['keywords']:
+        strategic_parts.append(f"**关键词**: {', '.join(result['keywords'])}")
+    
+    result['strategic_summary'] = '\n'.join(strategic_parts) if strategic_parts else None
+
+    return result
+
+
+def _load_final_decision_legacy():
+    """兼容旧版：返回 (topic, queries, strategic_intent) 三元组"""
+    result = _load_final_decision()
+    if not result:
+        return None, None, None
+    return result['topic'], result['keywords'], result.get('strategic_summary')
 
 
 def run_researcher(topic=None, queries=None, strategic_intent=None):
-    """运行研究智能体，自动搜索、爬取、整理笔记"""
+    """
+    v4.2: 运行研究智能体，自动搜索、爬取、整理笔记
+    
+    核心改进：
+    1. 从 FINAL_DECISION.md 提取 Fast Research 搜索指引
+    2. 使用结构化搜索指引进行精准搜索
+    3. 只传递精简的战略意图摘要（不含视觉脚本）
+    """
     from agents.researcher import ResearcherAgent
     
-    # 如果没有传入参数，尝试从 FINAL_DECISION.md 解析
-    if topic is None or queries is None or strategic_intent is None:
-        parsed_topic, parsed_queries, parsed_intent = _load_final_decision()
-        if topic is None:
-            topic = parsed_topic
-        if queries is None:
-            queries = parsed_queries
-        if strategic_intent is None:
-            strategic_intent = parsed_intent
-        
-        if not topic:
-            logger.error("❌ 未找到选题信息，请先运行 `python run.py final`")
-            logger.error("   或手动指定: researcher.run(topic='选题', queries=['关键词1', '关键词2'])")
-            return None
-        
-        if not queries:
-            # 如果没有找到关键词，用选题本身作为搜索词
-            queries = [topic]
+    # v4.2: 使用新的结构化解析
+    parsed = _load_final_decision()
+    
+    if not parsed:
+        logger.error("❌ 未找到选题信息，请先运行 `python run.py final`")
+        return None
+    
+    # 使用解析结果填充缺失参数
+    if topic is None:
+        topic = parsed.get('topic')
+    if queries is None:
+        queries = parsed.get('keywords', [])
+    if strategic_intent is None:
+        strategic_intent = parsed.get('strategic_summary')  # 使用精简摘要，不含视觉脚本
+    
+    if not topic:
+        logger.error("❌ 未找到选题标题，请检查 FINAL_DECISION.md 格式")
+        return None
+    
+    if not queries:
+        queries = [topic]
+    
+    # v4.2: 提取 Fast Research 搜索指引
+    fast_research = parsed.get('fast_research')
     
     logger.info(f"🎯 选题: {topic}")
     logger.info(f"🔑 关键词: {queries}")
+    if fast_research:
+        logger.info(f"📡 已加载 Fast Research 搜索指引 ({len(fast_research)} 字符)")
     
     researcher = ResearcherAgent()
-    return researcher.run(topic, queries, strategic_intent=strategic_intent)
+    return researcher.run(
+        topic=topic, 
+        queries=queries, 
+        strategic_intent=strategic_intent,
+        fast_research=fast_research  # v4.2: 传递搜索指引
+    )
 
 def run_all():
     from config import get_today_dir
@@ -185,7 +262,13 @@ def run_all():
     logger.info("="*60)
     logger.info("🔬 Phase 3: 自动化研究 (Exa + Tavily)")
     logger.info("="*60)
-    topic, queries, strategic_intent = _load_final_decision()
+    parsed = _load_final_decision()
+    if parsed:
+        topic = parsed.get('topic')
+        queries = parsed.get('keywords')
+        strategic_intent = parsed.get('strategic_summary')
+    else:
+        topic, queries, strategic_intent = None, None, None
     notes = run_researcher(topic=topic, queries=queries, strategic_intent=strategic_intent)
     
     if not notes:
@@ -262,6 +345,7 @@ def main():
     parser.add_argument('command', choices=['hunt', 'final', 'research', 'draft', 'refine', 'format', 'todo', 'all', 'help'], help='执行的命令', nargs='?', default='help')
     parser.add_argument('-d', '--date', help='指定工作日期 (MMDD 或 YYYY-MM-DD)，默认今天')
     parser.add_argument('-t', '--topic', help='[hunt专用] 指定搜索主题，启用混合优先级(命题作文+自由发挥)')
+    parser.add_argument('-s', '--style', default='green', help='[format专用] 排版风格: green/blue/orange/minimal/purple')
     args = parser.parse_args()
     
     # 设置工作日期
@@ -284,7 +368,7 @@ def main():
         run_drafter()
     elif args.command == 'format':
         check_environment("format")
-        run_formatter()
+        run_formatter(style=args.style)
     elif args.command == 'todo':
         check_environment("todo")
         run_todo()

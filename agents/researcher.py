@@ -1,11 +1,12 @@
 """
 ===============================================================================
-                    🔬 研究智能体 (Researcher Agent) v4.0 (Hardcore Edition)
+                    🔬 研究智能体 (Researcher Agent) v4.2 (Hardcore Edition)
 ===============================================================================
 核心策略：
 1. 智能聚合搜索：Exa AI (优先) + Tavily (兜底)，全网深度挖掘。
 2. 批判性评估过滤器：在笔记整理阶段，自动识别并标记“智商税”工具。
 3. 反套壳机制：强制提取底层技术原理，拒绝营销软文。
+4. v4.2 新增：Fast Research 指引解析 + 精准搜索查询生成
 ===============================================================================
 """
 
@@ -49,19 +50,23 @@ class ResearcherAgent:
         self.exa_api_key = EXA_API_KEY
         self.proxy_url = proxy_url
         
-        logger.info("✅ ResearcherAgent v4.0 初始化完成 (Exa + Tavily)")
+        logger.info("✅ ResearcherAgent v4.2 初始化完成 (Exa + Tavily + Fast Research)")
 
     def search_exa(self, topic: str, queries: List[str]) -> List[Dict[str, Any]]:
         """
         使用 Exa AI 进行高级搜索 (自动包含内容)
+        v4.2: 增强查询利用，使用 queries 进行多批次精准搜索
         """
         if not self.exa_api_key:
             logger.warning("未配置 EXA_API_KEY，跳过 Exa 搜索")
             return []
 
-        logger.info("🔍 [Step 1] Exa AI 智能搜索 (Topic: %s)...", topic)
+        logger.info("🔍 [Step 1] Exa AI 智能搜索...")
+        logger.info("   📌 主题: %s", topic)
+        logger.info("   🔑 查询词: %s", queries[:5])
         
         all_results = []
+        seen_urls = set()  # 去重
         headers = {
             "Authorization": f"Bearer {self.exa_api_key}",
             "Content-Type": "application/json"
@@ -78,22 +83,32 @@ class ResearcherAgent:
         ]
         
         batches = [
-            # Batch 1: 针对社交媒体的精准搜索
+            # Batch 1: 针对社交媒体的精准搜索 (使用主题)
             {
                 "query": f"{topic} 深度解析 避坑指南 教程",
-                "numResults": 8,
+                "numResults": 5,
                 "includeDomains": social_domains,
-                "useAutoprompt": True, # 让 Exa 优化查询
-                "contents": {"text": True} # 直接获取正文
+                "useAutoprompt": True,
+                "contents": {"text": True}
             },
-            # Batch 2: 全网通用搜索 (寻找最新/高质量长文)
+            # Batch 2: 全网通用搜索 (使用主题)
             {
                 "query": topic,
-                "numResults": 5,
+                "numResults": 3,
                 "useAutoprompt": True,
                 "contents": {"text": True}
             }
         ]
+        
+        # v4.2: 为每个精准查询词添加搜索批次
+        for q in queries[:4]:  # 最多取前4个查询词
+            if q != topic and len(q) > 5:
+                batches.append({
+                    "query": q,
+                    "numResults": 3,
+                    "useAutoprompt": True,
+                    "contents": {"text": True}
+                })
         
         @retryable
         def _exa_post(client: httpx.Client, payload: dict, headers: dict):
@@ -102,17 +117,23 @@ class ResearcherAgent:
         with httpx.Client(timeout=60, proxy=self.proxy_url) as client:
             for i, payload in enumerate(batches):
                 try:
-                    logger.info("🚀 Exa Batch %s 请求中...", i + 1)
+                    logger.info("🚀 Exa Batch %s 请求中 (query: %s)...", i + 1, payload.get('query', '')[:30])
                     resp = _exa_post(client, payload, headers)
                     resp.raise_for_status()
                     data = resp.json()
                     
                     results = data.get("results", [])
                     for res in results:
+                        res_url = res.get("url", "")
+                        # v4.2: URL 去重
+                        if res_url in seen_urls:
+                            continue
+                        seen_urls.add(res_url)
+                        
                         all_results.append({
-                            "url": res.get("url"),
+                            "url": res_url,
                             "title": res.get("title"),
-                            "text": res.get("text", ""), # Exa 直接返回的正文
+                            "text": res.get("text", ""),
                             "source": "Exa"
                         })
                         logger.info("✓ [Exa] %s...", (res.get('title', 'Unknown') or '')[:40])
@@ -120,6 +141,7 @@ class ResearcherAgent:
                 except Exception as e:
                     logger.error("❌ Exa Batch %s 失败: %s", i + 1, e)
 
+        logger.info("   📊 Exa 共获取 %d 条去重结果", len(all_results))
         return all_results
 
     def search_tavily_fallback(self, queries: List[str]) -> List[Dict[str, Any]]:
@@ -310,13 +332,66 @@ class ResearcherAgent:
             return f"整理失败: {e}"
 
 
-    def run(self, topic: str, queries: List[str], strategic_intent: Optional[str] = None) -> str:
+    def _generate_search_queries_from_fast_research(self, fast_research: str, topic: str) -> List[str]:
+        """
+        v4.2: 从 Fast Research 指引中提取精准搜索查询
+        使用 LLM 将结构化指引转换为实际搜索查询
+        """
+        logger.info("🧠 [Step 0] 从 Fast Research 指引生成精准搜索查询...")
+        
+        prompt = f"""你是一个搜索查询生成专家。根据以下"研究指引"，生成 5-8 个精准的搜索查询词。
+
+【研究指引】
+{fast_research}
+
+【文章主题】
+{topic}
+
+【输出要求】
+1. 每行一个搜索查询，不要编号
+2. 查询要具体、精准，能找到高质量的技术文章/教程/评测
+3. 优先包含：项目名称、技术术语、教程/评测/对比等关键词
+4. 避免过于宽泛的查询
+
+直接输出搜索查询列表，不要其他内容："""
+
+        try:
+            @retryable
+            def _chat_create():
+                return self.client.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                    max_tokens=500
+                )
+            
+            response = _chat_create()
+            queries_text = response.choices[0].message.content.strip()
+            queries = [q.strip() for q in queries_text.split('\n') if q.strip() and len(q.strip()) > 3]
+            
+            logger.info("   ✅ 生成了 %d 个精准搜索查询", len(queries))
+            for q in queries[:5]:
+                logger.info("      - %s", q[:50])
+            
+            return queries
+        except Exception as e:
+            logger.error("   ❌ 查询生成失败: %s", e)
+            return []
+
+    def run(self, topic: str, queries: List[str], strategic_intent: Optional[str] = None, fast_research: Optional[str] = None) -> str:
         logger.info("%s", "="*60)
-        logger.info("🔬 ResearcherAgent v4.0 (Exa AI)")
+        logger.info("🔬 ResearcherAgent v4.2 (Exa AI)")
         logger.info("📌 选题: %s", topic)
         logger.info("%s", "="*60)
 
-        # 1. Exa 搜索 (优先)
+        # v4.2: 如果有 Fast Research 指引，生成更精准的搜索查询
+        if fast_research:
+            generated_queries = self._generate_search_queries_from_fast_research(fast_research, topic)
+            if generated_queries:
+                queries = generated_queries + queries  # 合并：精准查询优先
+                queries = list(dict.fromkeys(queries))[:10]  # 去重，限制数量
+
+        # 1. Exa 搜索 (优先) - v4.2: 使用增强后的查询
         results = self.search_exa(topic, queries)
 
         # 2. 如果 Exa 结果太少，使用 Tavily 补充
@@ -334,11 +409,12 @@ class ResearcherAgent:
         # 4. 整理笔记
         notes = self.synthesize_notes(results, topic, strategic_intent=strategic_intent)
 
-        # 保存
+        # 保存 - v4.2: 精简战略意图，不再完整复制 FINAL_DECISION
         notes_file = get_research_notes_file()
         with open(notes_file, "w", encoding="utf-8") as f:
-            intent_section = f"\n\n## 🎯 战略意图（来自 FINAL_DECISION.md）\n\n{strategic_intent.strip()}\n" if strategic_intent else ""
-            f.write(f"# 🔬 自动研究笔记 (Exa AI)\n\n**选题**: {topic}\n**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{intent_section}\n---\n\n{notes}")
+            # 只保留精简的战略意图摘要
+            intent_section = f"\n\n## 🎯 战略意图摘要\n\n{strategic_intent.strip()}\n" if strategic_intent else ""
+            f.write(f"# 🔬 自动研究笔记 v4.2\n\n**选题**: {topic}\n**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{intent_section}\n---\n\n{notes}")
 
         logger.info("📁 笔记已保存: %s", notes_file)
         return notes

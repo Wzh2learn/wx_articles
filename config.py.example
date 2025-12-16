@@ -35,6 +35,15 @@ EXA_API_KEY = os.getenv("EXA_API_KEY") or ""
 # Tavily Search API (备用: https://tavily.com)
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY") or ""
 
+# ================= 配图配置 (v4.1 SiliconFlow) =================
+
+# SiliconFlow API Key (用于 Flux 图像生成)
+# https://cloud.siliconflow.cn/account/ak
+SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY") or ""
+
+# SiliconFlow API 地址
+SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
+
 # ================= 网络配置 =================
 
 # 代理地址（如果不需要代理，设为 None）
@@ -152,6 +161,45 @@ PERSONA_TAGS = [
     "AI", "人工智能", "大模型", "LLM", "DeepSeek", "Kimi", "ChatGPT", "Cursor",
     "效率", "工具", "工作流", "自动化", "提示词", "Prompt", "Agent", "RAG"
 ]
+
+# ================= 日志配置 =================
+
+import colorlog
+
+def get_logger(name: str) -> logging.Logger:
+    """获取带彩色输出的 logger"""
+    log = logging.getLogger(name)
+    if not log.handlers:
+        handler = colorlog.StreamHandler()
+        handler.setFormatter(colorlog.ColoredFormatter(
+            "%(log_color)s%(levelname)-8s%(reset)s %(message)s",
+            log_colors={
+                'DEBUG': 'cyan',
+                'INFO': 'green',
+                'WARNING': 'yellow',
+                'ERROR': 'red',
+                'CRITICAL': 'red,bg_white',
+            }
+        ))
+        log.addHandler(handler)
+        log.setLevel(logging.INFO)
+    return log
+
+
+# ================= 重试装饰器 =================
+
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+import httpx
+
+def retryable(func):
+    """通用重试装饰器：3次重试，指数退避"""
+    return retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError)),
+        reraise=True
+    )(func)
+
 
 # ================= 初始化 =================
 

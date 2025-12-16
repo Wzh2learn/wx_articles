@@ -1,16 +1,20 @@
 """
-✍️ 写作智能体 (Drafter) v4.0 (Hardcore Edition)
+✍️ 写作智能体 (Drafter) v4.2 (Hardcore Edition)
 核心策略：
 1. DeepSeek Reasoner：使用深度推理模型，确保逻辑严密。
 2. 专家验证约束：拒绝模棱两可，建立权威人设。
-3. 绝对禁忌：严禁推荐国内付费套壳工具，锁死"高阶玩法"为技术流。
+3. 绝对禁忌：严禁推荐国内付费套壳工具，锁死“高阶玩法”为技术流。
+4. v4.1 新增：混合配图机制 (TODO + AUTO_IMG)
+5. v4.2 新增：COVER_PROMPT 英文封面描述 + Draft->Final 直通车
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import re
 import httpx
 from openai import OpenAI
-from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, PROXY_URL, REQUEST_TIMEOUT, get_research_notes_file, get_draft_file, get_today_dir, get_stage_dir, get_logger, retryable
+from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, PROXY_URL, REQUEST_TIMEOUT, get_research_notes_file, get_draft_file, get_final_file, get_today_dir, get_stage_dir, get_logger, retryable
+from agents.illustrator import IllustratorAgent
 
 from datetime import datetime
 
@@ -113,9 +117,40 @@ def get_system_prompt(topic: str = None, strategic_intent: str = None):
 **关注我，下次继续聊 AI 工具的骚操作 👆**
 ```
 
-## 配图占位符格式
-遇到需要配图的地方，插入：
-`> TODO: [图片描述] (搜索关键词: keyword1, keyword2)`
+## 配图占位符格式（v4.2 混合模式）
+你有三种配图方式，请根据场景选择：
+
+### 0️⃣ 封面图提示词（必须提供！）
+在文章末尾（备选标题之前），你**必须**提供一个英文封面描述：
+格式：`> COVER_PROMPT: [English visual description, NO TEXT]`
+要求：
+- **必须用英文**（Flux 模型对英文理解更好）
+- **严禁包含任何文字/标题**（No text, no title, no words）
+- 画面要抽象、科技感强、高质感
+- 描述具体画面元素，如光效、颜色、构图
+示例：
+- `> COVER_PROMPT: Abstract cyberpunk cityscape with glowing data streams, isometric view, neon blue and purple, 8k resolution`
+- `> COVER_PROMPT: Futuristic AI neural network visualization, floating holographic nodes, dark background with volumetric lighting`
+- `> COVER_PROMPT: Minimalist tech illustration of a glowing smartphone with AI assistant emerging as light particles`
+
+### 1️⃣ 实操截图（人工处理）
+适用场景：展示真实界面、操作步骤、软件截图
+格式：`> TODO: [截图描述] (搜索关键词: keyword1, keyword2)`
+示例：`> TODO: [DeepSeek 联网模式开关位置截图] (搜索关键词: DeepSeek, 联网模式)`
+
+### 2️⃣ AI 素材图（自动生成）
+适用场景：抽象概念、氛围图、章节插图、装饰性配图
+格式：`> AUTO_IMG: [English visual description, NO TEXT]`
+要求：
+- **必须用英文描述**（Flux 模型对英文效果更好！）
+- **严禁包含任何文字**（No text, no words, no letters）
+- 画面要具体、有视觉冲击力
+示例：
+- `> AUTO_IMG: A glowing AI chip floating in dark space with blue neon lights, cinematic lighting`
+- `> AUTO_IMG: Robotic hand typing on holographic keyboard, futuristic office, volumetric fog`
+- `> AUTO_IMG: Abstract data flow visualization, glowing particles, dark background, 8k`
+
+ℹ️ **注意**：AUTO_IMG 和 COVER_PROMPT 会在文章生成后自动替换为真实图片链接。
 
 ## 备选标题
 在文末给出 3-5 个备选标题，格式：
@@ -164,9 +199,124 @@ def generate_draft(notes, topic: str = None, strategic_intent: str = None):
             logger.error("❌ 生成失败: %s", e)
             return None
 
-def main(topic: str = None, strategic_intent: str = None):
+
+def process_auto_images(content: str, illustrator: IllustratorAgent) -> str:
+    """
+    v4.1: 后处理逻辑 - 扫描并替换 AUTO_IMG 占位符
+    
+    Args:
+        content: 文章 Markdown 内容
+        illustrator: IllustratorAgent 实例
+    
+    Returns:
+        替换后的文章内容
+    """
+    if not illustrator.is_enabled():
+        logger.warning("⚠️ 配图功能未启用，保留 AUTO_IMG 占位符")
+        return content
+    
+    # 匹配 AUTO_IMG 占位符: > AUTO_IMG: xxx
+    pattern = r'>\s*AUTO_IMG:\s*(.+?)(?:\n|$)'
+    matches = re.findall(pattern, content)
+    
+    if not matches:
+        logger.info("📷 未发现 AUTO_IMG 占位符")
+        return content
+    
+    logger.info(f"🎨 发现 {len(matches)} 个 AUTO_IMG 占位符，开始生成...")
+    
+    for i, description in enumerate(matches, 1):
+        description = description.strip()
+        logger.info(f"   [{i}/{len(matches)}] 生成: {description[:40]}...")
+        
+        # 生成素材图
+        image_path = illustrator.generate_material(description)
+        
+        if image_path:
+            # 替换占位符为真实图片
+            old_placeholder = f"> AUTO_IMG: {description}"
+            new_image_tag = f"![素材图]({image_path})"
+            content = content.replace(old_placeholder, new_image_tag, 1)
+            logger.info(f"   ✅ 已替换为: {image_path}")
+        else:
+            logger.warning(f"   ⚠️ 生成失败，保留占位符")
+    
+    return content
+
+
+def extract_cover_prompt(content: str) -> tuple[str, str]:
+    """
+    v4.2: 从文章中提取 COVER_PROMPT 英文描述
+    
+    Args:
+        content: 文章 Markdown 内容
+    
+    Returns:
+        (cover_prompt, cleaned_content): 封面提示词和移除占位符后的内容
+    """
+    pattern = r'>\s*COVER_PROMPT:\s*(.+?)(?:\n|$)'
+    match = re.search(pattern, content)
+    
+    if match:
+        cover_prompt = match.group(1).strip()
+        # 移除占位符行
+        cleaned_content = re.sub(pattern, '', content)
+        logger.info(f"   🎯 发现 COVER_PROMPT: {cover_prompt[:50]}...")
+        return cover_prompt, cleaned_content
+    
+    return None, content
+
+
+def add_cover_image(content: str, topic: str, illustrator: IllustratorAgent) -> str:
+    """
+    v4.2: 在文章开头插入 AI 生成的封面图
+    优先使用 COVER_PROMPT 英文描述，降级使用中文标题
+    
+    Args:
+        content: 文章 Markdown 内容
+        topic: 文章主题/标题
+        illustrator: IllustratorAgent 实例
+    
+    Returns:
+        带封面图的文章内容
+    """
+    if not illustrator.is_enabled():
+        logger.warning("⚠️ 配图功能未启用，跳过封面生成")
+        return content
+    
+    logger.info("🖼️ 正在生成封面图...")
+    
+    # v4.2: 优先使用文章中的 COVER_PROMPT
+    cover_prompt, content = extract_cover_prompt(content)
+    
+    if cover_prompt:
+        logger.info(f"   🎨 使用英文 COVER_PROMPT 生成封面")
+        cover_path = illustrator.generate_cover(cover_prompt, use_raw_prompt=True)
+    else:
+        logger.warning(f"   ⚠️ 未找到 COVER_PROMPT，降级使用中文标题")
+        cover_path = illustrator.generate_cover(topic or "AI 技术文章")
+    
+    if cover_path:
+        # 在文章开头插入封面图
+        cover_tag = f"![封面]({cover_path})\n\n"
+        content = cover_tag + content
+        logger.info(f"   ✅ 封面已插入: {cover_path}")
+    else:
+        logger.warning("   ⚠️ 封面生成失败")
+    
+    return content
+
+def main(topic: str = None, strategic_intent: str = None, auto_illustrate: bool = True):
+    """
+    写作智能体主入口
+    
+    Args:
+        topic: 文章主题/标题
+        strategic_intent: 选题策划书
+        auto_illustrate: 是否启用自动配图 (v4.1)，默认开启
+    """
     logger.info("%s", "="*60)
-    logger.info("✍️ 写作智能体 - 王往AI")
+    logger.info("✍️ 写作智能体 v4.2 - 王往AI")
     logger.info("%s", "="*60)
     logger.info("📁 今日工作目录: %s", get_today_dir())
     
@@ -179,16 +329,57 @@ def main(topic: str = None, strategic_intent: str = None):
         return
     logger.info("✓ 共 %s 字符", len(notes))
     
+    # Step 1: 生成初稿
     draft = generate_draft(notes, topic=topic, strategic_intent=strategic_intent)
-    if draft:
-        draft_file = get_draft_file()
-        with open(draft_file, "w", encoding="utf-8") as f:
-            f.write(draft)
-        logger.info("✅ 初稿已保存: %s", draft_file)
-        logger.info("📌 下一步：")
-        logger.info("   1. 运行 python run.py todo 查看待补充内容")
-        logger.info("   2. 截图保存到 %s", get_stage_dir('assets'))
-        logger.info("   3. 润色后保存到 %s/final.md", get_stage_dir('publish'))
+    if not draft:
+        return
+    
+    # Step 2: v4.1 自动配图处理
+    if auto_illustrate:
+        logger.info("\n" + "="*40)
+        logger.info("🎨 v4.2 智能配图系统 (光影质感流)")
+        logger.info("="*40)
+        
+        illustrator = IllustratorAgent()
+        
+        if illustrator.is_enabled():
+            # 2a. 生成封面图并插入开头
+            draft = add_cover_image(draft, topic, illustrator)
+            
+            # 2b. 处理文中的 AUTO_IMG 占位符
+            draft = process_auto_images(draft, illustrator)
+        else:
+            logger.info("⏭️ 配图功能未启用，跳过自动配图")
+            logger.info("   💡 如需启用，请配置 REPLICATE_API_TOKEN")
+    
+    # Step 3: 保存最终草稿
+    draft_file = get_draft_file()
+    with open(draft_file, "w", encoding="utf-8") as f:
+        f.write(draft)
+    logger.info("✅ 初稿已保存: %s", draft_file)
+    
+    # Step 4 (v4.2 新增): 自动同步到 final.md (草稿即定稿)
+    final_file = get_final_file()
+    with open(final_file, "w", encoding="utf-8") as f:
+        f.write(draft)
+    logger.info("✅ 已同步生成 Final 版本: %s", final_file)
+    
+    # Step 5: 下一步提示
+    logger.info("\n📌 下一步：")
+    logger.info("   1. 运行 python run.py todo 查看待补充的 TODO 截图")
+    logger.info("   2. 手动截图保存到 %s", get_stage_dir('assets'))
+    logger.info("   3. 💡 后续请直接修改定稿: %s", final_file)
+    
+    # 统计配图情况
+    todo_count = len(re.findall(r'>\s*TODO:', draft))
+    auto_img_count = len(re.findall(r'!\[素材图\]', draft))
+    cover_count = 1 if '![封面]' in draft else 0
+    
+    logger.info("\n📊 配图统计：")
+    logger.info(f"   - AI 封面图: {cover_count} 张")
+    logger.info(f"   - AI 素材图: {auto_img_count} 张")
+    logger.info(f"   - 待手动截图 (TODO): {todo_count} 处")
+
 
 if __name__ == "__main__":
     main()

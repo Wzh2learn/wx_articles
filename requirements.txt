@@ -12,6 +12,9 @@ tavily-python>=0.3.0
 # === 写作智能体 (drafter.py) ===
 openai>=1.0.0
 
+# === 配图智能体 (illustrator.py) ===
+# 使用 openai SDK 调用 SiliconFlow API (已在 drafter.py 依赖中包含)
+
 # === 排版智能体 (formatter.py) ===
 markdown-it-py>=3.0.0
 pygments>=2.17.0
@@ -22,6 +25,7 @@ lxml>=5.0.0
 
 # === 基础工具 ===
 
+json_repair>=0.25.0
 tenacity>=8.2.0
 colorlog>=6.8.0
 

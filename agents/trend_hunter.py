@@ -10,8 +10,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import time
 import json
+import re
 import httpx
 import random
+from json_repair import repair_json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import List, Dict, Optional, Any
@@ -447,6 +449,43 @@ def extract_hot_entities(client: OpenAI, search_results: List[Dict[str, Any]]) -
 
 # ================= 核心逻辑 =================
 
+def _robust_json_parse(content: str) -> Any:
+    """
+    v4.1: 鲁棒 JSON 解析器
+    无论 LLM 输出带不带 Markdown 代码块，或者 JSON 缺了逗号引号，都能正确解析
+    """
+    if not content:
+        return []
+    
+    # 1. 尝试直接解析（最优情况：干净的 JSON）
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+    
+    # 2. 用正则提取第一个 JSON 对象/数组
+    json_pattern = r'(\{.*\}|\[.*\])'
+    match = re.search(json_pattern, content, re.DOTALL)
+    
+    if match:
+        raw_json = match.group(1)
+        try:
+            # 3. 使用 json_repair 修复并解析
+            repaired = repair_json(raw_json, return_objects=True)
+            log_print(f"      🔧 JSON 已自动修复")
+            return repaired
+        except Exception as e:
+            log_print(f"      ⚠️ JSON 修复失败: {e}")
+    
+    # 4. 终极回退：整体修复
+    try:
+        repaired = repair_json(content, return_objects=True)
+        return repaired
+    except Exception as e:
+        log_print(f"      ❌ JSON 解析彻底失败: {e}")
+        return []
+
+
 def get_plan_prompt(history_text: str = "", directed_topic: Optional[str] = None) -> str:
     """动态生成规划提示词，注入当前日期、历史记录和用户意图"""
     today = datetime.now().strftime('%Y-%m-%d')
@@ -473,25 +512,31 @@ def get_plan_prompt(history_text: str = "", directed_topic: Optional[str] = None
 你是“王往AI”的首席内容策略官。
 请基于【全网情报】和【心理学策略】，挖掘 3 个最具“爆款潜质”的选题方向。
 
-心理学策略：
-1. **A路 (锚点效应)**: 借势顶流 (DeepSeek/Kimi)，关注其"隐藏功能"或"最新玩法"。
-2. **B路 (即时满足)**: 寻找"效率神器"、"Life Hack"，主打"3分钟上手"、"下班早走1小时"。
-3. **C路 (损失厌恶)**: 寻找"避坑指南"、"智商税"、"平替"、"翻车现场"，引发用户危机感。
+## 价值公式
+**选题价值** = (信息差 × 认知冲击) + (痛点强度 × 解决效率) - 阅读门槛
+
+## 心理学三路策略（必须覆盖至少2路，保证多样性）
+1. **A路 - 锚点效应 (借势顶流)**：借助 DeepSeek/Cursor/Gemini 等顶流产品的知名度，关注其"隐藏功能"或"最新玩法"。用户看到熟悉的名字更容易点击。
+2. **B路 - 即时满足 (效能神器)**：寻找真正的"效率神器"，主打"3分钟上手"、"下班早走1小时"。让用户觉得"看完就能用"。
+3. **C路 - 损失厌恶 (避坑/认知)**：
+   - 避坑类：寻找"智商税"、"翻车现场"、"平替"，触发用户害怕踩坑的心理。
+   - 认知类：解读新趋势、新硬件（如 AI 耳机、手机智能体），让用户害怕"落后于时代"。
 
 输入数据：
 - 长期关注品类动态
 - 本周热门工具/教程
 - 用户吐槽与痛点
+- 大厂新发布动态
 
 决策标准：
-- ✅ **保留**：DeepSeek 联网搜索怎么用才准、Cursor 免费额度没了怎么办、夸克扫描王对比。
-- ❌ **剔除**：OpenAI 融资消息、Google 发布新论文、某某行业大模型白皮书。
+- ✅ **保留**：DeepSeek 隐藏玩法（锚点）、免费画架构图（即时满足）、Cursor 收费避坑（损失厌恶）、Google AI 耳机体验（认知升级）。
+- ❌ **剔除**：纯枯燥的融资新闻、过于学术的论文解读、毫无新意的"正确的废话"、冷门无名小工具。
 
 输出格式（严格 JSON）：
 [
     {{
         "event": "选题核心词 (如: DeepSeek)",
-        "angle": "切入角度 (如: 隐藏玩法 / 避坑指南)",
+        "angle": "切入角度 (如: 隐藏玩法 / 避坑指南 / 深度评测)",
         "news_query": "功能性搜索词 (如: DeepSeek V3 file upload)",
         "social_query": "情绪性搜索词 (如: DeepSeek 报错 / DeepSeek 不好用)"
     }},
@@ -622,10 +667,9 @@ def step1_broad_scan_and_plan(
 
         response = _chat_create()
         content = response.choices[0].message.content
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0]
         
-        search_plan = json.loads(content)
+        # v4.1: 使用 json_repair 增强鲁棒性
+        search_plan = _robust_json_parse(content)
         if isinstance(search_plan, dict) and "events" in search_plan:
             search_plan = search_plan["events"]
             
@@ -792,28 +836,35 @@ def step3_final_decision(
 
 EDITOR_PROMPT = """
 你叫"王往AI"，专注 AI 工作流的硬核博主。
-请筛选 3 个【获得感最高】的选题。
+请筛选 3 个【价值最高】的选题，**必须覆盖至少 2 种心理策略**以保证多样性。
 
-**获得感公式** = (帮用户解决的痛点 * 节省的时间/金钱) - 阅读门槛
+## 价值公式
+**选题价值** = (信息差 × 认知冲击) + (痛点强度 × 解决效率) - 阅读门槛
+
+## 心理学策略（3 个选题必须覆盖至少 2 路）
+1. **锚点效应 (借势顶流)**：借助 DeepSeek/Cursor/Gemini 等顶流产品的知名度，用户更容易点击。
+2. **即时满足 (效能神器)**：让用户觉得"看完就能用"，获得正反馈。如"3分钟学会"、"免费白嫖"。
+3. **损失厌恶 (避坑/认知)**：触发用户"害怕踩坑"或"害怕落后"的心理。如"翻车现场"、"新趋势解读"。
 
 🛡️ **质量过滤红线**（必须遵守）：
-1. **拒绝野鸡工具**：非大厂/非开源的小众工具直接剔除，尤其是那些不知名的付费套壳网站。
-2. **大厂新动作优先**：如果智谱、OpenAI、DeepSeek 有新动作，优先级最高。
-3. **开源优先**：GitHub 上的高星开源项目优先级高于闭源付费工具。
+1. **拒绝低质内容**：剔除毫无新意的"正确的废话"和冷门无名小工具。
+2. **大厂新动作优先**：Google、OpenAI、DeepSeek、Anthropic 等大厂的新发布、新功能优先级最高。
+3. **前沿趋势优先**：新的 Agent 玩法、新的开源黑马项目、新的硬件体验（如 AI 耳机/手机）值得关注。
 
 决策逻辑：
-1. **只做人话**：拒绝所有技术黑话，把"上下文缓存"翻译成"让AI记住你上周说了啥"。
-2. **只做痛点**：优先选"避坑"、"平替"、"白嫖"、"提效"类选题。
+1. **既要实操也要认知**：不要只盯着"省时间"的小工具。如果有一个新的技术趋势，即使暂时不能下载，只要能带来"认知震撼"，也是好选题。
+2. **拒绝过度营销**：剔除那些只有营销噱头没有实质内容的工具。
 3. **关联热点**：如果涉及 WATCHLIST 中的产品，加分。
 
 输出格式：
-### 选题 1：[标题] (需极具吸引力，如：DeepSeek 居然还能这么玩？)
-* **获得感**：[用户看完能得到什么？省钱？省时？]
-* **心理锚点**：[利用了什么心理？贪便宜？怕落后？]
-* **核心看点**：[文章大纲，包含具体的工具/技巧]
+### 选题 1：[标题] (需极具吸引力)
+* **心理锚点**：[锚点效应 / 即时满足 / 损失厌恶]
+* **核心价值**：[用户看完能得到什么？新知？技能？避坑？]
+* **热度评级**：[⭐⭐⭐⭐⭐]
+* **推荐理由**：[为什么这个选题现在值得写？]
 ---
 ## 今日主推
-告诉我不写会后悔的那个 (获得感最强的)。
+告诉我不写会后悔的那个 (价值最高的)，并说明它命中了哪个心理锚点。
 """
 
 def auto_init_workflow() -> None:
@@ -883,13 +934,64 @@ def main(topic=None):
     
     log_print("\n✅ 选题雷达完成！")
 
+def _extract_topic_frequencies(reports_content: str) -> Dict[str, int]:
+    """
+    v4.1: 从多份报告中提取关键词出现频率
+    高频出现的关键词说明热度持续，应优先考虑
+    """
+    from collections import Counter
+    
+    # 定义高价值关键词模式（大厂产品、热门概念）
+    high_value_keywords = [
+        # 大厂产品
+        "DeepSeek", "Cursor", "Gemini", "Claude", "GPT", "Kimi", "Copilot",
+        "Windsurf", "Bolt", "Lovable", "秘塔", "豆包", "通义", "智谱", "AutoGLM",
+        # 热门概念
+        "Agent", "智能体", "MCP", "RAG", "实时翻译", "AI 耳机", "手机助手",
+        "架构图", "流程图", "思维导图", "文档分析", "代码生成",
+        # 效率场景
+        "免费", "平替", "白嫖", "避坑", "翻车"
+    ]
+    
+    freq = Counter()
+    content_lower = reports_content.lower()
+    
+    for kw in high_value_keywords:
+        count = content_lower.count(kw.lower())
+        if count > 0:
+            freq[kw] = count
+    
+    return dict(freq.most_common(10))
+
+
+def _generate_topic_insights(freq: Dict[str, int], reports_count: int) -> str:
+    """
+    v4.1: 根据频率统计生成选题洞察，注入到 Prompt 中辅助决策
+    """
+    if not freq:
+        return "暂无高频关键词统计。"
+    
+    insights = []
+    insights.append(f"📊 **关键词热度统计** (来自 {reports_count} 份报告)：")
+    
+    for kw, count in freq.items():
+        if count >= 3:
+            insights.append(f"   🔥🔥🔥 **{kw}**: 出现 {count} 次 (极高热度，强烈推荐)")
+        elif count >= 2:
+            insights.append(f"   🔥🔥 **{kw}**: 出现 {count} 次 (高热度)")
+        else:
+            insights.append(f"   🔥 **{kw}**: 出现 {count} 次")
+    
+    return "\n".join(insights)
+
+
 def final_summary():
     """综合当天所有报告，给出最终选题推荐和三个提示词"""
     import glob
     from config import get_today_dir
     
     log_print("\n" + "="*60)
-    log_print("🎯 综合选题决策 - 整合今日所有报告")
+    log_print("🎯 综合选题决策 v4.1 - 整合今日所有报告")
     log_print("="*60 + "\n")
     
     # 1. 读取当天所有报告
@@ -909,59 +1011,80 @@ def final_summary():
     
     combined = "\n\n".join(all_content)
     
+    # === v4.1: 预处理 - 关键词频率分析 ===
+    log_print("\n🔍 [v4.1] 正在分析关键词热度...")
+    topic_freq = _extract_topic_frequencies(combined)
+    topic_insights = _generate_topic_insights(topic_freq, len(reports))
+    log_print(topic_insights)
+    
     # 2. DeepSeek 综合分析
     log_print("\n🧠 DeepSeek 正在综合分析...")
     
-    FINAL_PROMPT = """
+    FINAL_PROMPT = f"""
 你是"王往AI"，一个擅长从多份情报中提炼核心选题的公众号主编。
 
 你的任务：综合分析今天的所有选题报告，选出【1个最终选题】，并输出3个结构化提示词。
 
+## 🔥 系统预处理：关键词热度分析
+{topic_insights}
+
+⚠️ **重要指令**：上述高频关键词代表今日持续热点，请在选题时**优先考虑**这些方向！
+
+## 价值公式 (心理学驱动)
+**选题价值** = (信息差 × 认知冲击) + (痛点强度 × 解决效率) - 阅读门槛
+
+心理学策略（三选一，但可混搭）：
+1. **锚点效应 (借势)**：借助顶流产品的知名度，用户更容易点击（如 "DeepSeek 隐藏玩法"）
+2. **即时满足 (效能)**：让用户觉得"看完就能用"，获得即时正反馈（如 "3分钟学会"）
+3. **损失厌恶 (避坑)**：让用户害怕错过或踩坑，触发紧迫感（如 "别再被坑了"）
+
 ## 选题标准 (按优先级)
-1. **出现频率高**：多次出现的选题说明热度持续，值得深挖
-2. **获得感强**：能让读者"省钱、省时、学会新技能"的选题优先
-3. **痛点尖锐**：解决的问题越具体、越痛，越有爆款潜质
+1. **高频热点优先**：多次出现在报告中的关键词说明热度持续，优先选择
+2. **大厂动作优先**：Google/OpenAI/DeepSeek 等大厂的新发布、新功能优先级最高
+3. **价值多元**：
+   - **认知类**：解读新趋势、新硬件（如 AI 耳机、手机智能体），满足求知欲
+   - **实操类**：真正的效率神器（如 免费画图），满足即时满足心理
+   - **避坑类**：翻车现场、智商税揭秘，满足损失厌恶心理
+4. **拒绝平庸**：剔除那些"看起来有用但实际没啥用"的工具
 
 ## 输出格式
 
 ### 🏆 今日最终选题
-**标题**：[爆款标题，15-25字]
-**一句话卖点**：[用户看完能得到什么？]
+**标题**：[爆款标题，15-25字，运用心理学技巧]
+**心理锚点**：[锚点效应 / 即时满足 / 损失厌恶，选一个主打]
+**一句话卖点**：[用户看完能得到什么？认知升级？解决痛点？避开陷阱？]
 **关键词**：[3-5个搜索关键词，用于后续素材搜集]
 
 ### 📡 提示词 1：Fast Research (用于自动研究 / research 阶段)
 ```
 [请用中文，告诉 Researcher 需要搜索哪些具体内容，包括：
-- 官方文档/教程
-- 用户真实评价/避坑经验
-- 同类工具对比
-- 最新更新/版本变化
+- 官方文档/发布会/Demo
+- 行业专家的深度解读/评测
+- 用户的真实体验/吐槽
+- 竞品对比
 格式要求：分条列出，每条一个明确的搜索任务]
 ```
 
 ### 🎨 提示词 2：视觉脚本 (用于配图方案)
 ```
 [请用中文，建议需要准备的配图，包括：
-- 关键截图 (哪个界面、哪个步骤)
-- 对比图 (什么 vs 什么)
-- 流程图 (如果有复杂流程)
-- 封面图风格建议
-- 信息图要点 (适合用 Infographic 生成的数据/对比)]
+- 关键截图 (如：新功能界面、Demo演示)
+- 对比图 (新旧对比、竞品对比)
+- 概念图 (如果是抽象概念，如何可视化)
+- 封面图风格建议 (高大上、科技感或极简风)]
 ```
 
 ### 🎨 视觉配图指南 (Visual Guide)
 **说明**：请为人工配图提供详细的画面建议，帮助博主快速产出高质量素材。
 [请用中文列出不少于 3 张关键配图的建议：
 
-封面图：[画面描述，如：DeepSeek Logo 与 Excel 图标对撞，科技感，橙蓝配色]
+封面图：[画面描述，如：科技感流光背景，突出核心关键词]
 
-痛点图：[描述一张能展示"旧方法很麻烦"的截图或梗图]
+内页图1：[描述]
 
-效果图：[描述一张展示"新方法太爽了"的对比图或最终效果]
+内页图2：[描述]
 
-信息图/流程图：[如果有复杂步骤，建议画一张什么样的流程图] ]
-
-
+内页图3：[描述] ]
 """
 
     with httpx.Client(proxy=PROXY_URL, timeout=REQUEST_TIMEOUT) as http_client:
