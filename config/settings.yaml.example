@@ -1,0 +1,53 @@
+watchlist:
+  - "DeepSeek"
+  - "Gemini"
+  - "Claude"
+  - "Llama"
+
+trend_sources:
+  - name: "Hacker News"
+    tag: "硬核技术"
+    primary: "https://news.ycombinator.com"
+    backup: "https://news.ycombinator.com/rss"
+  - name: "Product Hunt"
+    tag: "效率工具新品"
+    primary: "https://www.producthunt.com"
+    backup: "https://www.producthunt.com/feed"
+
+operational_phase: "VALUE_HACKER"
+
+phase_config:
+  VALUE_HACKER:
+    name: "价值黑客模式"
+    weights:
+      news: 1.5
+      social: 2.0
+      github: 1.0
+    strategy: "50% 效能神器 + 50% 前沿热点"
+    prompt_suffix: "保持技术与认知平衡"
+
+efficiency_keywords:
+  - "AI 自动写周报"
+  - "AI 读长论文"
+
+pain_keywords:
+  - "AI 幻觉"
+  - "收费 AI 避坑"
+
+radar_queries:
+  - "site:news.ycombinator.com AI"
+  - "AI technology breaking news today"
+
+concurrency:
+  max_fetches: 5
+  fetch_timeout: 30
+
+pricing:
+  deepseek-chat:
+    input: 0.14
+    output: 0.28
+    cache: 0.014
+  deepseek-reasoner:
+    input: 0.55
+    output: 2.19
+    cache: 0.14

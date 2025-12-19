@@ -23,6 +23,7 @@ ENV/
 # 项目特定（用户数据不提交）
 data/archive/
 logs/
+config/settings.yaml
 
 # AI 生成的配图（保留 .keep 文件）
 5_assets/*.png

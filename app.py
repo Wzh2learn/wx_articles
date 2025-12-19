@@ -86,6 +86,11 @@ def save_selection(topic):
 st.sidebar.title("📚 History")
 history = load_history()
 
+# Date selector for workflow (affects downstream buttons)
+selected_date = st.sidebar.date_input("工作日期", datetime.now())
+date_str = selected_date.strftime("%Y-%m-%d")
+config.set_working_date(date_str)
+
 # Reverse to show newest first
 for item in reversed(history):
     date = item.get("date", "Unknown Date")
@@ -100,6 +105,7 @@ st.sidebar.markdown("### ⚙️ Workflow Actions")
 if st.sidebar.button("🏆 1. Generate Decision", use_container_width=True):
     with st.sidebar.spinner("Generating FINAL_DECISION..."):
         try:
+            config.set_working_date(date_str)
             trend_hunter.final_summary()
             st.sidebar.success("Decision generated!")
         except Exception as e:
@@ -108,6 +114,7 @@ if st.sidebar.button("🏆 1. Generate Decision", use_container_width=True):
 if st.sidebar.button("🔬 2. Start Research", use_container_width=True):
     with st.sidebar.spinner("Running Researcher..."):
         try:
+            config.set_working_date(date_str)
             cli_run.run_researcher()
             st.sidebar.success("Research completed!")
         except Exception as e:
@@ -116,6 +123,7 @@ if st.sidebar.button("🔬 2. Start Research", use_container_width=True):
 if st.sidebar.button("✍️ 3. Write Draft", use_container_width=True):
     with st.sidebar.spinner("Running Drafter..."):
         try:
+            config.set_working_date(date_str)
             cli_run.run_drafter()
             st.sidebar.success("Draft generated!")
         except Exception as e:
@@ -307,3 +315,13 @@ with tab2:
                     st.info("Audit completed. See logs/output for details.")
             except Exception as e:
                 st.error(f"Audit failed: {e}")
+
+    # Audit summary display (if exists)
+    audit_file = config.get_today_file("audit_report.md", stage="publish")
+    if os.path.exists(audit_file):
+        st.markdown("---")
+        st.subheader("📋 Summary of Audit")
+        with open(audit_file, "r", encoding="utf-8") as f:
+            audit_content = f.read()
+        with st.expander("View audit report", expanded=False):
+            st.markdown(audit_content)
