@@ -10,6 +10,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config
+import run as cli_run
 from agents import trend_hunter, formatter, refiner, auditor
 
 # Set page config
@@ -93,6 +94,32 @@ for item in reversed(history):
     st.sidebar.markdown(f"**{date}**")
     st.sidebar.text(f"{topic}\n({angle})")
     st.sidebar.markdown("---")
+
+# Workflow actions
+st.sidebar.markdown("### ⚙️ Workflow Actions")
+if st.sidebar.button("🏆 1. Generate Decision", use_container_width=True):
+    with st.sidebar.spinner("Generating FINAL_DECISION..."):
+        try:
+            trend_hunter.final_summary()
+            st.sidebar.success("Decision generated!")
+        except Exception as e:
+            st.sidebar.error(f"Failed: {e}")
+
+if st.sidebar.button("🔬 2. Start Research", use_container_width=True):
+    with st.sidebar.spinner("Running Researcher..."):
+        try:
+            cli_run.run_researcher()
+            st.sidebar.success("Research completed!")
+        except Exception as e:
+            st.sidebar.error(f"Failed: {e}")
+
+if st.sidebar.button("✍️ 3. Write Draft", use_container_width=True):
+    with st.sidebar.spinner("Running Drafter..."):
+        try:
+            cli_run.run_drafter()
+            st.sidebar.success("Draft generated!")
+        except Exception as e:
+            st.sidebar.error(f"Failed: {e}")
 
 # ================= Main Interface =================
 

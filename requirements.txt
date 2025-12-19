@@ -33,6 +33,7 @@ tenacity>=8.2.0
 colorlog>=6.8.0
 PyYAML>=6.0.0
 python-dotenv>=1.0.0
+streamlit>=1.37.0
 
 
 # === 安装命令 ===

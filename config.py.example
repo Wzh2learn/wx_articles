@@ -1,220 +1,193 @@
 """
 ===============================================================================
-                    ⚙️ 统一配置文件 (config.py)
+                    ⚙️ 统一配置文件示例 (config.py.example)
 ===============================================================================
-所有智能体共享的配置项，修改这里即可全局生效
-
-使用方法：
-1. 复制此文件为 config.py
-2. 填入你的真实 API Key 和密钥
-3. config.py 已被 .gitignore 排除，不会被提交
+复制为 config.py 并填入你的密钥。实际配置从 config/settings.yaml 加载，
+此示例与当前逻辑保持同步，暴露向下兼容的常量。
 ===============================================================================
 """
 
 import os
 import logging
+import yaml
+import csv
+import functools
 from datetime import datetime
+from dotenv import load_dotenv
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+load_dotenv()
 
-# ================= API 配置 =================
-
-# DeepSeek API Key（优先从环境变量读取）
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY") or "sk-your-deepseek-api-key"
-
-# DeepSeek API 地址
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-
-# ================= 搜索配置 =================
-
-# Exa AI (原 Metaphor) API Key
-# https://dashboard.exa.ai/api-keys
-EXA_API_KEY = os.getenv("EXA_API_KEY") or ""
-
-# Tavily Search API (备用: https://tavily.com)
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY") or ""
-
-# ================= 配图配置 (v4.1 SiliconFlow) =================
-
-# SiliconFlow API Key (用于 Flux 图像生成)
-# https://cloud.siliconflow.cn/account/ak
-SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY") or ""
-
-# SiliconFlow API 地址
-SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
-
-# ================= 网络配置 =================
-
-# 代理地址（如果不需要代理，设为 None）
-PROXY_URL = "http://127.0.0.1:7898"
-
-# 请求超时时间（秒）
-REQUEST_TIMEOUT = 120
-
-# ================= 微信公众号配置 =================
-
-# 微信公众号配置 (在公众号后台-开发-基本配置中获取)
-# 支持环境变量: WECHAT_APP_ID, WECHAT_APP_SECRET
-# 注意：不要将真实密钥提交到公开仓库！
-WECHAT_APP_ID = os.getenv("WECHAT_APP_ID") or "wx-your-app-id"
-WECHAT_APP_SECRET = os.getenv("WECHAT_APP_SECRET") or "your-app-secret"
+try:
+    import colorlog
+except Exception:
+    colorlog = None
 
 # ================= 路径配置 =================
-
-# 项目根目录
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-
-# 数据目录
+LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 ARCHIVE_DIR = os.path.join(DATA_DIR, "archive")
 
-# ================= 日期目录管理 =================
+# ================= 配置文件加载 =================
+def load_settings():
+    settings_path = os.path.join(PROJECT_ROOT, "config", "settings.yaml")
+    if not os.path.exists(settings_path):
+        return {}
+    with open(settings_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
 
-# 工作日期（默认今天，可通过 set_working_date() 指定）
+SETTINGS = load_settings()
+
+# 暴露静态配置（保持向下兼容）
+WATCHLIST = SETTINGS.get("watchlist", [])
+TREND_SOURCES = SETTINGS.get("trend_sources", [])
+OPERATIONAL_PHASE = SETTINGS.get("operational_phase", "VALUE_HACKER")
+PHASE_CONFIG = SETTINGS.get("phase_config", {})
+EFFICIENCY_KEYWORDS = SETTINGS.get("efficiency_keywords", [])
+PAIN_KEYWORDS = SETTINGS.get("pain_keywords", [])
+RADAR_QUERIES = SETTINGS.get("radar_queries", [])
+
+_concurrency = SETTINGS.get("concurrency", {})
+MAX_CONCURRENT_FETCHES = _concurrency.get("max_fetches", 5)
+FETCH_TIMEOUT_SECONDS = _concurrency.get("fetch_timeout", 30)
+
+# ================= 成本追踪 =================
+COST_LOG_FILE = os.path.join(DATA_DIR, "cost_log.csv")
+
+def _init_cost_log():
+    if not os.path.exists(COST_LOG_FILE):
+        os.makedirs(os.path.dirname(COST_LOG_FILE), exist_ok=True)
+        with open(COST_LOG_FILE, "w", encoding="utf-8", newline="") as f:
+            csv.writer(f).writerow(
+                ["Timestamp", "Model", "Input Tokens", "Output Tokens", "Cache Hit Tokens", "Estimated Cost ($)", "Function"]
+            )
+
+_init_cost_log()
+
+# ================= API 配置 =================
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY") or "sk-your-deepseek-api-key"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+
+EXA_API_KEY = os.getenv("EXA_API_KEY") or ""
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY") or ""
+
+SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY") or ""
+SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
+
+# ================= 网络配置 =================
+PROXY_URL = "http://127.0.0.1:7898"
+REQUEST_TIMEOUT = 120
+
+# ================= 日期目录管理 =================
 WORKING_DATE = None
 
 def set_working_date(date_str):
     """设置工作日期，格式: YYYY-MM-DD 或 MMDD"""
     global WORKING_DATE
     if date_str:
-        # 支持 MMDD 简写格式
         if len(date_str) == 4 and date_str.isdigit():
             year = datetime.now().year
             date_str = f"{year}-{date_str[:2]}-{date_str[2:]}"
         WORKING_DATE = date_str
-        logger.info("📅 工作日期已设置为: %s", WORKING_DATE)
+        get_logger(__name__).info(f"📅 工作日期已设置为: {WORKING_DATE}")
 
 def get_working_date():
-    """获取当前工作日期"""
     return WORKING_DATE or datetime.now().strftime("%Y-%m-%d")
 
-# 工作流阶段目录（数字前缀保证排序）
 STAGE_DIRS = {
-    "topics": "1_topics",      # 选题报告
-    "research": "2_research",  # 调研笔记
-    "drafts": "3_drafts",      # 草稿
-    "publish": "4_publish",    # 发布文件
-    "assets": "5_assets",      # 资源文件（图片等）
+    "topics": "1_topics",
+    "research": "2_research",
+    "drafts": "3_drafts",
+    "publish": "4_publish",
+    "assets": "5_assets",
 }
 
 def get_today_dir():
-    """获取工作日期的归档目录，如果不存在则创建"""
     date_str = get_working_date()
     date_dir = os.path.join(ARCHIVE_DIR, date_str)
     os.makedirs(date_dir, exist_ok=True)
     return date_dir
 
 def get_stage_dir(stage):
-    """获取今天某个阶段的目录"""
     stage_name = STAGE_DIRS.get(stage, stage)
     stage_dir = os.path.join(get_today_dir(), stage_name)
     os.makedirs(stage_dir, exist_ok=True)
     return stage_dir
 
 def get_today_file(filename, stage=None):
-    """获取今天归档目录下的文件路径，可指定阶段"""
     if stage:
         return os.path.join(get_stage_dir(stage), filename)
     return os.path.join(get_today_dir(), filename)
 
-# ================= 各阶段文件路径 =================
-
+# 各阶段文件路径
 def get_topic_report_file():
-    """选题报告"""
     timestamp = datetime.now().strftime("%H%M")
     return get_today_file(f"report_{timestamp}.md", "topics")
 
 def get_research_notes_file():
-    """研究笔记（直接在日期目录下编辑）"""
     return get_today_file("notes.txt", "research")
 
 def get_draft_file():
-    """草稿"""
     return get_today_file("draft.md", "drafts")
 
 def get_todo_file():
-    """TODO 清单"""
     return get_today_file("todo_list.txt", "drafts")
 
 def get_history_file():
-    """历史选题记录"""
     return os.path.join(DATA_DIR, "history.json")
 
 def get_final_file():
-    """定稿"""
     return get_today_file("final.md", "publish")
 
 def get_html_file():
-    """HTML 输出"""
     return get_today_file("output.html", "publish")
 
 def get_assets_dir():
-    """资源目录（图片等）"""
     return get_stage_dir("assets")
 
-
 # ================= 人设配置 =================
-
-# 博主人设标签（用于选题过滤）
 PERSONA_TAGS = [
     "AI", "人工智能", "大模型", "LLM", "DeepSeek", "Kimi", "ChatGPT", "Cursor",
     "效率", "工具", "工作流", "自动化", "提示词", "Prompt", "Agent", "RAG"
 ]
 
 # ================= 日志配置 =================
-
-import colorlog
-
-def get_logger(name: str) -> logging.Logger:
-    """获取带彩色输出的 logger"""
+def get_logger(name: str = "wx_articles") -> logging.Logger:
     log = logging.getLogger(name)
-    if not log.handlers:
-        handler = colorlog.StreamHandler()
-        handler.setFormatter(colorlog.ColoredFormatter(
-            "%(log_color)s%(levelname)-8s%(reset)s %(message)s",
-            log_colors={
-                'DEBUG': 'cyan',
-                'INFO': 'green',
-                'WARNING': 'yellow',
-                'ERROR': 'red',
-                'CRITICAL': 'red,bg_white',
-            }
-        ))
-        log.addHandler(handler)
-        log.setLevel(logging.INFO)
+    if log.handlers:
+        return log
+    log.setLevel(logging.INFO)
+    ch = logging.StreamHandler()
+    ch._wx_articles_handler = True
+    if colorlog is not None:
+        ch.setFormatter(
+            colorlog.ColoredFormatter(
+                "%(log_color)s%(asctime)s %(levelname)s %(name)s: %(message)s",
+                datefmt="%H:%M:%S",
+                log_colors={
+                    "DEBUG": "cyan",
+                    "INFO": "green",
+                    "WARNING": "yellow",
+                    "ERROR": "red",
+                    "CRITICAL": "bold_red",
+                },
+            )
+        )
+    else:
+        ch.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    log.addHandler(ch)
     return log
 
-
-# ================= 重试装饰器 =================
-
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-import httpx
-
-def retryable(func):
-    """通用重试装饰器：3次重试，指数退避"""
-    return retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError)),
-        reraise=True
-    )(func)
-
-
 # ================= 初始化 =================
-
 def setup_proxy():
-    """设置代理环境变量"""
     if PROXY_URL:
-        os.environ['HTTP_PROXY'] = PROXY_URL
-        os.environ['HTTPS_PROXY'] = PROXY_URL
-        os.environ['http_proxy'] = PROXY_URL
-        os.environ['https_proxy'] = PROXY_URL
+        os.environ["HTTP_PROXY"] = PROXY_URL
+        os.environ["HTTPS_PROXY"] = PROXY_URL
+        os.environ["http_proxy"] = PROXY_URL
+        os.environ["https_proxy"] = PROXY_URL
 
 def ensure_dirs():
-    """确保必要的目录存在"""
     os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
-# 自动初始化
 setup_proxy()
 ensure_dirs()
