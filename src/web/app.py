@@ -5,9 +5,15 @@ import glob
 import re
 from datetime import datetime
 import sys
+from pathlib import Path
 
-# Ensure project root is in path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Ensure project root is in path (supports running from anywhere)
+CURRENT_DIR = Path(__file__).resolve().parent
+SRC_DIR = CURRENT_DIR.parent
+PROJECT_ROOT = SRC_DIR.parent
+for p in (SRC_DIR, PROJECT_ROOT):
+    if str(p) not in sys.path:
+        sys.path.insert(0, str(p))
 
 import config
 import run as cli_run
@@ -35,13 +41,12 @@ def load_history():
 
 def get_latest_report_content():
     # Find latest report in 1_topics
-    topics_dir = config.get_stage_dir("topics")
-    reports = glob.glob(os.path.join(topics_dir, "report_*.md"))
+    topics_dir = Path(config.get_stage_dir("topics"))
+    reports = list(topics_dir.glob("report_*.md"))
     if not reports:
         return None
-    latest_report = max(reports, key=os.path.getmtime)
-    with open(latest_report, "r", encoding="utf-8") as f:
-        return f.read()
+    latest_report = max(reports, key=lambda p: p.stat().st_mtime)
+    return latest_report.read_text(encoding="utf-8")
 
 def parse_topics_from_report(content):
     """Parse topics from the report markdown content"""
@@ -317,11 +322,10 @@ with tab2:
                 st.error(f"Audit failed: {e}")
 
     # Audit summary display (if exists)
-    audit_file = config.get_today_file("audit_report.md", stage="publish")
-    if os.path.exists(audit_file):
+    audit_file = Path(config.get_today_file("audit_report.md", stage="publish"))
+    if audit_file.exists():
         st.markdown("---")
         st.subheader("📋 Summary of Audit")
-        with open(audit_file, "r", encoding="utf-8") as f:
-            audit_content = f.read()
+        audit_content = audit_file.read_text(encoding="utf-8")
         with st.expander("View audit report", expanded=False):
             st.markdown(audit_content)

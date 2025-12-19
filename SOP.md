@@ -1,7 +1,7 @@
 # 📅 每日公众号发文 SOP (wx_articles v4.3) — 精简实战版
 
 ## 1. 早安：选题雷达 (09:00)
-1. 启动后台：`streamlit run app.py`
+1. 启动后台：`streamlit run web/app.py`
 2. 打开 **Topic Radar** 标签页。
 3. 输入今日核心意图（可选，如 "DeepSeek"），点击 **🚀 Start Scan**。
 4. 浏览扫描结果，看到心动的选题，点击 **Select**（此时已存入历史，防止撞车）。

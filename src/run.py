@@ -14,15 +14,18 @@
 """
 
 import sys
-import os
 import argparse
+from pathlib import Path
+
+# Ensure project root (parent of src) is on sys.path
+CURRENT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CURRENT_DIR.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import get_logger, DEEPSEEK_API_KEY, EXA_API_KEY, TAVILY_API_KEY
 
 logger = get_logger(__name__)
-
-# 确保可以导入 agents 模块
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 def print_help():
     logger.info("""

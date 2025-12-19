@@ -57,7 +57,7 @@
 ### 🖥️ Streamlit 后台
 
 ```bash
-streamlit run app.py
+streamlit run web/app.py
 ```
 
 功能：交互式选题扫描、草稿/定稿编辑、实时排版预览（支持新增 livid/vue/typewriter 风格）。
@@ -66,7 +66,8 @@ streamlit run app.py
 
 ```
 wx_articles/
-├─ app.py                   # Streamlit 可视化后台
+├─ web/
+│  └─ app.py                # Streamlit 可视化后台
 ├─ run.py                   # CLI 入口（hunt/final/research/draft/refine/audit/format/todo/all）
 ├─ config/
 │  └─ settings.yaml         # 中央配置（watchlist、pricing、sources）
