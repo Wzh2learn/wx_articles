@@ -13,6 +13,7 @@ import json
 import re
 import httpx
 import random
+from difflib import SequenceMatcher
 from json_repair import repair_json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -22,10 +23,8 @@ from openai import OpenAI
 from config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, PROXY_URL, REQUEST_TIMEOUT,
     TAVILY_API_KEY, get_topic_report_file, get_today_dir,
-    get_stage_dir, get_research_notes_file, get_history_file, get_logger, retryable
-)
-from settings_data import (
-    WATCHLIST, TREND_SOURCES, OPERATIONAL_PHASE, PHASE_CONFIG,
+    get_stage_dir, get_research_notes_file, get_history_file, get_logger, retryable,
+    track_cost, WATCHLIST, TREND_SOURCES, OPERATIONAL_PHASE, PHASE_CONFIG,
     EFFICIENCY_KEYWORDS, PAIN_KEYWORDS, RADAR_QUERIES,
     MAX_CONCURRENT_FETCHES, FETCH_TIMEOUT_SECONDS
 )
@@ -105,7 +104,44 @@ def save_topic_to_history(topic, angle):
         json.dump(history, f, ensure_ascii=False, indent=2)
     log_print(f"   💾 历史记录已更新: {topic}")
 
-# ================= 配置区（从 settings_data.py 导入） =================
+# ================= 去重与相似度辅助 =================
+
+def _max_similarity_to_history(title: str, history_items: List[Dict[str, str]]) -> float:
+    """计算标题与历史记录的最大相似度"""
+    if not title or not history_items:
+        return 0.0
+    sims = []
+    for h in history_items:
+        hist_title = (h.get("topic") or "").strip()
+        if not hist_title:
+            continue
+        sims.append(SequenceMatcher(None, title.lower(), hist_title.lower()).ratio())
+    return max(sims) if sims else 0.0
+
+def _dedup_search_plan(search_plan: List[Dict[str, str]], history_items: List[Dict[str, str]], threshold: float = 0.82) -> List[Dict[str, str]]:
+    """
+    根据历史选题做简单去重，若全部被判定为重复，则强制保留相似度最低的一个，避免饥饿。
+    """
+    if not search_plan:
+        return search_plan
+    scored = []
+    for item in search_plan:
+        title = (item.get("event") or "").strip()
+        max_sim = _max_similarity_to_history(title, history_items)
+        new_item = dict(item)
+        new_item["_max_sim"] = max_sim
+        scored.append(new_item)
+    deduped = [i for i in scored if i["_max_sim"] < threshold]
+    if not deduped and scored:
+        fallback = min(scored, key=lambda x: x["_max_sim"])
+        log_print(f"⚠️ All topics were flagged as duplicates. Force-keeping the least similar one: {fallback.get('event', '(unknown)')}")
+        deduped = [fallback]
+    # 移除内部评分字段
+    for i in deduped:
+        i.pop("_max_sim", None)
+    return deduped
+
+# ================= 配置区 =================
 
 CURRENT_CONFIG = PHASE_CONFIG[OPERATIONAL_PHASE]
 
@@ -222,7 +258,7 @@ def fetch_dynamic_trends(
     """
     log_print("   🌐 [热榜抓取] 从全网热榜获取实时趋势 (并发模式)...")
     
-    # 数据源配置已移至 settings_data.py
+    # 数据源配置
     sources = TREND_SOURCES
     
     # ===== Phase 1: 并发抓取所有源 =====
@@ -383,6 +419,7 @@ def _extract_keywords_from_single_source(
     
     try:
         @retryable
+        @track_cost(context="extract_keywords")
         def _chat_create():
             return client.chat.completions.create(
                 model="deepseek-chat",
@@ -428,6 +465,7 @@ def extract_hot_entities(client: OpenAI, search_results: List[Dict[str, Any]]) -
     """
     try:
         @retryable
+        @track_cost(context="extract_hot_entities")
         def _chat_create():
             return client.chat.completions.create(
                 model="deepseek-chat",
@@ -654,6 +692,7 @@ def step1_broad_scan_and_plan(
 
     try:
         @retryable
+        @track_cost(context="step1_broad_scan_and_plan")
         def _chat_create():
             return client.chat.completions.create(
                 model="deepseek-chat",
@@ -672,7 +711,11 @@ def step1_broad_scan_and_plan(
         search_plan = _robust_json_parse(content)
         if isinstance(search_plan, dict) and "events" in search_plan:
             search_plan = search_plan["events"]
-            
+        
+        # v4.4: 去重并防饥饿，若全重复则强制保留相似度最低的一个
+        history_items = load_history()
+        search_plan = _dedup_search_plan(search_plan, history_items)
+        
         log_print(f"   🧠 选题方向已锁定: {[i['event'] + '-' + i['angle'] for i in search_plan]}\n")
         return search_plan
     except Exception as e:
@@ -810,6 +853,7 @@ def step3_final_decision(
     try:
         # 单次扫描用 chat 模型（快、便宜），综合决策才用 reasoner
         @retryable
+        @track_cost(context="step3_final_decision")
         def _chat_create():
             return client.chat.completions.create(
                 model="deepseek-chat",
@@ -1092,6 +1136,7 @@ def final_summary():
         
         try:
             @retryable
+            @track_cost(context="final_summary")
             def _chat_create():
                 return client.chat.completions.create(
                     model="deepseek-reasoner",

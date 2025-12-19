@@ -23,11 +23,16 @@ cssutils>=2.11.0
 pyperclip>=1.8.0
 lxml>=5.0.0
 
+# === 截图智能体 (screenshotter.py) ===
+playwright>=1.40.0
+
 # === 基础工具 ===
 
 json_repair>=0.25.0
 tenacity>=8.2.0
 colorlog>=6.8.0
+PyYAML>=6.0.0
+python-dotenv>=1.0.0
 
 
 # === 安装命令 ===

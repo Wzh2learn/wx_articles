@@ -21,11 +21,21 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import httpx
+import shutil
+from datetime import datetime
 from openai import OpenAI
 import config
 
 
 logger = config.get_logger(__name__)
+
+def _backup_file(path: str):
+    """Create a timestamped backup if the file exists."""
+    if os.path.exists(path):
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup_path = f"{path}.bak-{ts}"
+        shutil.copy(path, backup_path)
+        logger.info(f"🛡️ Created backup: {backup_path}")
 
 # ================= 系统提示词 =================
 
@@ -138,7 +148,6 @@ def refine_article(instruction: str, date: str = None):
 """
     
     # 调用 DeepSeek API
-
     logger.info("🚀 调用 DeepSeek Reasoner...")
     logger.info("%s", "=" * 20 + " 润色中 " + "=" * 20)
 
@@ -151,6 +160,7 @@ def refine_article(instruction: str, date: str = None):
 
         try:
             @config.retryable
+            @config.track_cost(context="refine_article")
             def _chat_create():
                 return client.chat.completions.create(
                     model="deepseek-reasoner",
@@ -184,6 +194,7 @@ def refine_article(instruction: str, date: str = None):
 
             # 保存到 final.md
             os.makedirs(os.path.dirname(final_file), exist_ok=True)
+            _backup_file(final_file)
             with open(final_file, "w", encoding="utf-8") as f:
                 f.write(full_content)
 

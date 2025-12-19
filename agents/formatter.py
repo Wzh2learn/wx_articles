@@ -131,6 +131,57 @@ blockquote { margin: 25px 0; padding: 20px; background: linear-gradient(135deg, 
 p code, li code { background: #f9f0ff; color: #722ed1; padding: 2px 5px; border-radius: 3px; font-size: 0.9em; }
 """
     },
+
+    # ========== Livid - V2EX 极客风 ==========
+    "livid": {
+        "name": "Livid极客",
+        "accent": "#333333",
+        "css": """
+body, .article-content { font-size: 15px; line-height: 1.75; color: #333; letter-spacing: 0.5px; }
+h1 { font-size: 20px; font-weight: bold; text-align: center; color: #000; margin: 40px 0 20px; border-bottom: 1px solid #e2e2e2; padding-bottom: 15px; }
+h2 { font-size: 17px; font-weight: bold; color: #000; margin: 40px 0 20px; padding-bottom: 5px; border-bottom: 2px solid #000; display: inline-block; }
+h3 { font-size: 16px; font-weight: bold; color: #333; margin: 30px 0 15px; background: #f0f0f0; padding: 5px 10px; border-radius: 3px; display: inline-block; }
+strong, b { font-weight: bold; color: #000; background: #f0f0f0; padding: 0 4px; border-radius: 2px; }
+blockquote { margin: 25px 0; padding: 15px 20px; background: #f9f9f9; border-left: 4px solid #555; color: #666; font-size: 14px; }
+p code, li code { background: #f0f0f0; color: #333; border: 1px solid #e0e0e0; padding: 2px 5px; border-radius: 3px; }
+a { color: #778087; border-bottom: 1px dotted #778087; }
+"""
+    },
+
+    # ========== Vue - 清新科技风 ==========
+    "vue": {
+        "name": "Vue清新",
+        "accent": "#42b983",
+        "css": """
+h1 { font-size: 24px; font-weight: bold; text-align: center; color: #2c3e50; margin: 40px 0 20px; }
+h2 { font-size: 20px; font-weight: bold; color: #42b983; margin: 45px 0 20px; padding-bottom: 8px; border-bottom: 1px solid #eaecef; }
+h3 { font-size: 18px; font-weight: bold; color: #2c3e50; margin: 35px 0 15px; position: relative; padding-left: 15px; }
+h3::before { content: ''; position: absolute; left: 0; top: 5px; width: 6px; height: 18px; background: #42b983; border-radius: 2px; }
+strong, b { font-weight: bold; color: #42b983; }
+blockquote { margin: 25px 0; padding: 15px 20px; background: #f8f8f8; border-left: 4px solid #42b983; color: #555; border-radius: 4px; }
+p code, li code { color: #e96900; background-color: #f8f8f8; padding: 3px 5px; margin: 0 2px; border-radius: 2px; font-family: 'Roboto Mono', Monaco, courier, monospace; }
+a { color: #42b983; border-bottom: 1px solid #42b983; }
+ul li::marker { color: #42b983; }
+"""
+    },
+
+    # ========== Typewriter - 复古打字机 ==========
+    "typewriter": {
+        "name": "复古打印",
+        "accent": "#b58900",
+        "css": """
+body, .article-content { font-family: Georgia, 'Songti SC', 'SimSun', serif; background-color: #fdf6e3; color: #586e75; }
+h1 { font-family: Georgia, serif; font-size: 24px; font-weight: bold; text-align: center; color: #b58900; margin: 50px 0 30px; border-top: 3px double #b58900; border-bottom: 3px double #b58900; padding: 20px 0; letter-spacing: 2px; }
+h2 { font-family: Georgia, serif; font-size: 20px; font-weight: bold; color: #268bd2; margin: 40px 0 20px; text-decoration: underline; text-underline-offset: 6px; text-decoration-color: #268bd2; }
+h3 { font-family: Georgia, serif; font-size: 18px; font-weight: bold; color: #2aa198; margin: 30px 0 15px; font-style: italic; }
+strong, b { font-weight: bold; color: #cb4b16; }
+blockquote { font-family: Georgia, serif; margin: 25px 0; padding: 20px; background: #eee8d5; border-left: 4px solid #657b83; color: #657b83; font-style: italic; }
+pre { background: #002b36; color: #839496; border: 1px solid #073642; border-radius: 4px; }
+p code, li code { background: #eee8d5; color: #d33682; font-family: Consolas, monospace; padding: 2px 5px; }
+hr { border: none; border-top: 1px dashed #93a1a1; height: 0; margin: 40px 0; }
+a { color: #268bd2; border-bottom: 1px dotted #268bd2; }
+"""
+    },
 }
 
 def get_style_css(style_name: str = "green") -> str:

@@ -24,7 +24,7 @@ from tavily import TavilyClient
 from config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, 
     TAVILY_API_KEY, EXA_API_KEY,
-    PROXY_URL, REQUEST_TIMEOUT, get_research_notes_file, get_logger, retryable
+    PROXY_URL, REQUEST_TIMEOUT, get_research_notes_file, get_logger, retryable, track_cost
 )
 
 
@@ -240,8 +240,29 @@ class ResearcherAgent:
                         for s in soup(['script', 'style']): s.extract()
                         item['text'] = soup.get_text()[:10000]
                         logger.info("✓ 直连成功")
+                        continue
                 except Exception as e:
-                    logger.error("❌ 失败: %s", e)
+                    pass
+
+                # 3. Tavily 兜底 (作为提取器)
+                try:
+                    if self.tavily:
+                        #以此 URL 为 query 进行搜索，并请求 raw_content
+                        tavily_resp = self.tavily.search(
+                            query=url,
+                            include_raw_content=True,
+                            max_results=1
+                        )
+                        if tavily_resp and 'results' in tavily_resp and tavily_resp['results']:
+                            raw_content = tavily_resp['results'][0].get('raw_content')
+                            if raw_content:
+                                item['text'] = raw_content[:10000]
+                                logger.info("✓ Tavily 兜底成功 (Raw Content)")
+                                continue
+                except Exception as e:
+                    logger.error("❌ Tavily 兜底失败: %s", e)
+                
+                logger.error("❌ 所有获取手段均失败")
 
     def synthesize_notes(self, items: List[Dict[str, Any]], topic: str, strategic_intent: Optional[str] = None) -> str:
         """
@@ -257,6 +278,10 @@ class ResearcherAgent:
         raw_text = ""
         for item in items:
             text = item.get("text", "")
+            if not text or len(text.strip()) < 50:
+                logger.warning(f"⚠️ [内容缺失] 忽略条目: {item.get('title', 'Unknown')} (无正文)")
+                continue
+                
             if len(text) > 100:
                 raw_text += f"\n{'='*50}\nSource: {item['url']}\nTitle: {item.get('title')}\n{'='*50}\n{text[:8000]}\n"
         
@@ -299,6 +324,7 @@ class ResearcherAgent:
 
         try:
             @retryable
+            @track_cost(context="synthesize_notes")
             def _chat_create():
                 return self.client.chat.completions.create(
                     model="deepseek-chat",
@@ -357,6 +383,7 @@ class ResearcherAgent:
 
         try:
             @retryable
+            @track_cost(context="generate_search_queries")
             def _chat_create():
                 return self.client.chat.completions.create(
                     model="deepseek-chat",

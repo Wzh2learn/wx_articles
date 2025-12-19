@@ -22,11 +22,13 @@ ENV/
 
 # 项目特定（用户数据不提交）
 data/archive/
+logs/
 
 # AI 生成的配图（保留 .keep 文件）
 5_assets/*.png
 5_assets/*.jpg
 5_assets/*.jpeg
+
 !5_assets/.keep
 
 # 配置文件（包含敏感密钥，勿提交！）

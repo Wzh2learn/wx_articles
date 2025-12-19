@@ -11,28 +11,65 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import re
+import json
 import httpx
+import shutil
 from openai import OpenAI
-from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, PROXY_URL, REQUEST_TIMEOUT, get_research_notes_file, get_draft_file, get_final_file, get_today_dir, get_stage_dir, get_logger, retryable
+from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, PROXY_URL, REQUEST_TIMEOUT, get_research_notes_file, get_draft_file, get_final_file, get_today_dir, get_stage_dir, get_logger, retryable, track_cost
 from agents.illustrator import IllustratorAgent
 
 from datetime import datetime
 
 
+import time
+from agents import screenshotter
+
 logger = get_logger(__name__)
 
-def get_system_prompt(topic: str = None, strategic_intent: str = None):
+def _backup_file(path: str):
+    """Create a timestamped backup if the file exists."""
+    if os.path.exists(path):
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup_path = f"{path}.bak-{ts}"
+        shutil.copy(path, backup_path)
+        logger.info(f"🛡️ Created backup: {backup_path}")
+
+def get_system_prompt(topic: str = None, strategic_intent: str = None, visual_script: dict = None):
     """
-    动态生成系统提示词 (注入反套壳/专家人设约束)
+    动态生成系统提示词 (注入反套壳/专家人设约束/视觉脚本)
     包含：
     1. 时效性注入
     2. 专家验证约束
     3. 绝对禁忌 (红线)
+    4. 视觉脚本 (如果存在)
     """
     today = datetime.now().strftime('%Y年%m月')
     strategic_block = f"\n\n## 🎯 最高指令：选题策划书（必须逐条执行）\n{strategic_intent}\n" if strategic_intent else ""
     topic_block = f"\n\n## 文章标题约束\n文章标题必须使用：{topic}\n" if topic else ""
+    
+    visual_block = ""
+    if visual_script:
+        vs_str = json.dumps(visual_script, indent=2, ensure_ascii=False)
+        visual_block = f"""
+## 🎨 强制视觉脚本 (Visual Script Execution)
+你收到了经过策划的视觉脚本，请**严格按照**以下脚本插入配图占位符，不要自己随意发挥：
+
+【视觉脚本内容】
+{vs_str}
+
+【执行要求】
+1. **封面图**：必须在文章末尾使用脚本中的 `cover_prompt`。
+   格式：`> COVER_PROMPT: [脚本中的 cover_prompt]`
+   
+2. **文中插图**：请将脚本中的 `illustrations` 列表里的图片，根据上下文逻辑插入到文章最合适的位置。
+   - 如果 type 是 "screenshot" -> 使用 `> TODO: [description] (搜索关键词: ...)`
+   - 如果 type 是 "art" -> 使用 `> AUTO_IMG: [description]`
+   
+⚠️ **注意**：脚本中的 description 如果是英文（针对 art），请直接填入 AUTO_IMG；如果是中文（针对 screenshot），请填入 TODO。确保所有脚本中的图片都被使用！
+"""
+
     return f"""
+    {visual_block}
 你叫"王往AI"。热爱新兴技术的探索者，专注 AI 工作流的硬核博主。
 
 ## ⚠️ 时效性要求（重要！）
@@ -65,7 +102,7 @@ def get_system_prompt(topic: str = None, strategic_intent: str = None):
 - 文章结构必须覆盖策划书的“核心看点”，不得漏项
 - 严禁自由发挥导致偏题：如果研究笔记里有内容不服务于策划书目标，宁可不写
 - 如遇冲突：以“可引用证据”为准，同时在文中点出“与策划书假设不一致”的地方
-{topic_block}{strategic_block}
+{topic_block}{strategic_block}{visual_block}
 
 ## 决策指令（聚焦唯一最佳实践）
 当研究笔记中出现多个解决同一问题的工具/路线（例如 VSCode 插件 vs Cursor 原生功能）时：
@@ -133,10 +170,20 @@ def get_system_prompt(topic: str = None, strategic_intent: str = None):
 - `> COVER_PROMPT: Futuristic AI neural network visualization, floating holographic nodes, dark background with volumetric lighting`
 - `> COVER_PROMPT: Minimalist tech illustration of a glowing smartphone with AI assistant emerging as light particles`
 
-### 1️⃣ 实操截图（人工处理）
+### 1️⃣ 实操截图（人工处理 或 自动截图）
 适用场景：展示真实界面、操作步骤、软件截图
 格式：`> TODO: [截图描述] (搜索关键词: keyword1, keyword2)`
+
+**v4.3 新增 - 自动截图功能**：
+如果你需要截取某个官网首页，请按以下格式，系统会自动调用浏览器截图：
+格式：`> TODO: [DeepSeek 官网首页] (type="screenshot", url="https://www.deepseek.com")`
+要求：
+- 必须包含 `type="screenshot"`
+- 必须包含有效的 `url="..."`
+- URL 必须是官网首页或公开页面，无需登录
+
 示例：`> TODO: [DeepSeek 联网模式开关位置截图] (搜索关键词: DeepSeek, 联网模式)`
+示例：`> TODO: [DeepSeek 官网] (type="screenshot", url="https://www.deepseek.com")`
 
 ### 2️⃣ AI 素材图（自动生成）
 适用场景：抽象概念、氛围图、章节插图、装饰性配图
@@ -170,16 +217,17 @@ def read_notes(filepath):
     with open(filepath, "r", encoding="utf-8") as f:
         return f.read()
 
-def generate_draft(notes, topic: str = None, strategic_intent: str = None):
+def generate_draft(notes, topic: str = None, strategic_intent: str = None, visual_script: dict = None):
     logger.info("🚀 调用 DeepSeek Reasoner...")
     with httpx.Client(proxy=PROXY_URL, timeout=REQUEST_TIMEOUT) as http_client:
         client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL, http_client=http_client)
         messages = [
-            {"role": "system", "content": get_system_prompt(topic=topic, strategic_intent=strategic_intent)},
+            {"role": "system", "content": get_system_prompt(topic=topic, strategic_intent=strategic_intent, visual_script=visual_script)},
             {"role": "user", "content": f"【选题标题】\n{topic or ''}\n\n【选题策划书 / 战略意图（最高指令）】\n{strategic_intent or ''}\n\n【研究笔记】\n{notes}"}
         ]
         try:
             @retryable
+            @track_cost(context="generate_draft")
             def _chat_create():
                 return client.chat.completions.create(model="deepseek-reasoner", messages=messages, stream=True)
 
@@ -244,6 +292,69 @@ def process_auto_images(content: str, illustrator: IllustratorAgent) -> str:
     return content
 
 
+def process_screenshots(content: str) -> str:
+    """
+    v4.3: 扫描 TODO 标签，自动处理网页截图
+    格式: > TODO: [...] (type="screenshot", url="...")
+    """
+    # 匹配 TODO 标签
+    # 格式: > TODO: [description] (params)
+    pattern = r'>\s*TODO:\s*\[(.*?)\]\s*\((.*?)\)'
+    
+    matches = list(re.finditer(pattern, content))
+    if not matches:
+        return content
+        
+    logger.info(f"📸 扫描到 {len(matches)} 个 TODO 项，正在检查自动截图任务...")
+    
+    offset = 0
+    new_content = content
+    
+    for match in matches:
+        full_match = match.group(0)
+        desc = match.group(1)
+        params_str = match.group(2)
+        
+        # 检查是否包含 type="screenshot" 和 url
+        if 'type="screenshot"' in params_str or "type='screenshot'" in params_str:
+            # 提取 URL
+            url_match = re.search(r'url=["\'](.*?)["\']', params_str)
+            if url_match:
+                url = url_match.group(1)
+                logger.info(f"   🔭 发现截图任务: {desc} -> {url}")
+                
+                # 定义保存路径
+                filename = f"screenshot_{int(time.time())}_{abs(hash(url)) % 10000}.png"
+                assets_dir = get_stage_dir('assets')
+                output_path = os.path.join(assets_dir, filename)
+                
+                # 相对路径用于 Markdown
+                # 假设运行目录是项目根目录，图片在 5_assets
+                # 但最终 md 可能在 3_drafts 或 4_publish，引用 5_assets 需要 ../5_assets 或者绝对路径
+                # 为了兼容性，通常使用相对路径。
+                # 如果 draft.md 在 3_drafts/draft.md, assets 在 5_assets/
+                # 引用应该是 ../5_assets/xxx.png
+                # 但这里我们简单起见，假设 draft.md 和 assets 都在 working date 目录下
+                # 我们使用相对路径 "5_assets/xxx.png" 如果最终发布是把所有东西打包
+                # 或者使用 "../5_assets/filename"
+                
+                # 修正：get_stage_dir 返回的是 absolute path
+                # 我们需要生成 markdown 中使用的路径
+                # 简单处理：使用相对路径 "../5_assets/" (因为 draft 在 3_drafts)
+                md_rel_path = f"../5_assets/{filename}"
+                
+                # 执行截图
+                if screenshotter.capture_homepage(url, output_path):
+                    replacement = f"![官网截图]({md_rel_path})\n> *自动截图: {desc}*"
+                    new_content = new_content.replace(full_match, replacement, 1)
+                else:
+                    logger.warning(f"   ⚠️ 截图失败，将标注为需要人工截图")
+                    failure_note = f"> ⚠️ AUTO-SCREENSHOT FAILED: {desc}. Please capture manually."
+                    new_content = new_content.replace(full_match, failure_note, 1)
+    
+    return new_content
+
+
 def extract_cover_prompt(content: str) -> tuple[str, str]:
     """
     v4.2: 从文章中提取 COVER_PROMPT 英文描述
@@ -306,18 +417,22 @@ def add_cover_image(content: str, topic: str, illustrator: IllustratorAgent) -> 
     
     return content
 
-def main(topic: str = None, strategic_intent: str = None, auto_illustrate: bool = True):
+def main(topic: str = None, strategic_intent: str = None, visual_script: dict = None, auto_illustrate: bool = True):
     """
     写作智能体主入口
     
     Args:
         topic: 文章主题/标题
         strategic_intent: 选题策划书
+        visual_script: 视觉脚本 (JSON)
         auto_illustrate: 是否启用自动配图 (v4.1)，默认开启
     """
     logger.info("%s", "="*60)
     logger.info("✍️ 写作智能体 v4.2 - 王往AI")
     logger.info("%s", "="*60)
+    if visual_script:
+        logger.info("🎨 已加载视觉脚本")
+        
     logger.info("📁 今日工作目录: %s", get_today_dir())
     
     notes_file = get_research_notes_file()
@@ -330,7 +445,7 @@ def main(topic: str = None, strategic_intent: str = None, auto_illustrate: bool 
     logger.info("✓ 共 %s 字符", len(notes))
     
     # Step 1: 生成初稿
-    draft = generate_draft(notes, topic=topic, strategic_intent=strategic_intent)
+    draft = generate_draft(notes, topic=topic, strategic_intent=strategic_intent, visual_script=visual_script)
     if not draft:
         return
     
@@ -351,15 +466,20 @@ def main(topic: str = None, strategic_intent: str = None, auto_illustrate: bool 
         else:
             logger.info("⏭️ 配图功能未启用，跳过自动配图")
             logger.info("   💡 如需启用，请配置 REPLICATE_API_TOKEN")
+
+    # Step 2.5: v4.3 自动截图处理
+    draft = process_screenshots(draft)
     
     # Step 3: 保存最终草稿
     draft_file = get_draft_file()
+    _backup_file(draft_file)
     with open(draft_file, "w", encoding="utf-8") as f:
         f.write(draft)
     logger.info("✅ 初稿已保存: %s", draft_file)
     
     # Step 4 (v4.2 新增): 自动同步到 final.md (草稿即定稿)
     final_file = get_final_file()
+    _backup_file(final_file)
     with open(final_file, "w", encoding="utf-8") as f:
         f.write(draft)
     logger.info("✅ 已同步生成 Final 版本: %s", final_file)

@@ -16,6 +16,8 @@ from .drafter import main as run_drafter
 from .formatter import main as run_formatter
 from .todo_extractor import main as run_todo_extractor
 from .refiner import refine_article as run_refiner
+from .screenshotter import capture_homepage
+from .auditor import audit_article as run_auditor
 
 __all__ = [
     'run_trend_hunter',
@@ -23,5 +25,7 @@ __all__ = [
     'run_drafter', 
     'run_formatter',
     'run_todo_extractor',
-    'run_refiner'
+    'run_refiner',
+    'capture_homepage',
+    'run_auditor'
 ]

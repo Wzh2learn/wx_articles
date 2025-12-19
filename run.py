@@ -41,6 +41,7 @@ def print_help():
 ║    research- 🔬 研究智能体 (自动搜索、爬取、整理笔记)        ║
 ║    draft   - ✍️ 写作智能体 (读取笔记，生成初稿)              ║
 ║    refine  - ✨ 润色智能体 (定向修改: refine "指令")        ║
+║    audit   - 🕵️ 审计智能体 (核查事实，防幻觉)                ║
 ║    format  - 🎨 排版智能体 (转换HTML，复制到剪贴板)          ║
 ║    todo    - 📋 提取TODO (列出草稿中需补充的内容)            ║
 ║    all     - 🔄 完整流程 (依次运行，需人工介入)              ║
@@ -60,7 +61,7 @@ def print_help():
 def check_environment(command: str):
     missing = []
 
-    llm_commands = {"hunt", "final", "research", "draft", "refine", "all"}
+    llm_commands = {"hunt", "final", "research", "draft", "refine", "audit", "all"}
     if command in llm_commands:
         if not DEEPSEEK_API_KEY:
             missing.append("DEEPSEEK_API_KEY")
@@ -78,7 +79,7 @@ def run_hunter(topic=None):
     from agents.trend_hunter import main
     main(topic=topic)
 
-def run_drafter(topic=None, strategic_intent=None):
+def run_drafter(topic=None, strategic_intent=None, visual_script=None):
     from agents.drafter import main
     if topic is None or strategic_intent is None:
         parsed = _load_final_decision()
@@ -87,8 +88,10 @@ def run_drafter(topic=None, strategic_intent=None):
                 topic = parsed.get('topic')
             if strategic_intent is None:
                 strategic_intent = parsed.get('strategic_summary')
+            if visual_script is None:
+                visual_script = parsed.get('visual_script')
 
-    main(topic=topic, strategic_intent=strategic_intent)
+    main(topic=topic, strategic_intent=strategic_intent, visual_script=visual_script)
 
 def run_formatter(style: str = "green"):
     from agents.formatter import main
@@ -164,6 +167,26 @@ def _load_final_decision():
     if fast_research_match:
         result['fast_research'] = fast_research_match.group(1).strip()
         logger.info("   ✅ 已提取 Fast Research 搜索指引")
+
+    # 提取 Visual Script (JSON)
+    visual_script_match = re.search(
+        r'###\s*🎨\s*视觉脚本.*?```json\s*(.*?)```',
+        content, re.DOTALL | re.IGNORECASE
+    )
+    if visual_script_match:
+        try:
+            from json_repair import repair_json
+            vs_json = repair_json(visual_script_match.group(1).strip(), return_objects=True)
+            if isinstance(vs_json, dict) and 'visual_script' in vs_json:
+                result['visual_script'] = vs_json['visual_script']
+                logger.info("   ✅ 已提取 Visual Script (JSON)")
+            else:
+                 # 兼容直接返回 visual_script 内容的情况
+                result['visual_script'] = vs_json
+                logger.info("   ✅ 已提取 Visual Script (JSON - Direct)")
+        except Exception as e:
+            logger.warning(f"   ⚠️ Visual Script 解析失败: {e}")
+            result['visual_script'] = None
 
     # 构建精简的战略意图摘要（不含视觉脚本）
     strategic_parts = []
@@ -279,7 +302,14 @@ def run_all():
     logger.info("="*60)
     logger.info("✍️ Phase 4: 写作智能体")
     logger.info("="*60)
-    run_drafter(topic=topic, strategic_intent=strategic_intent)
+    
+    # 重新加载以获取 visual_script
+    if parsed:
+        visual_script = parsed.get('visual_script')
+    else:
+        visual_script = None
+        
+    run_drafter(topic=topic, strategic_intent=strategic_intent, visual_script=visual_script)
     
     # ============ 人工介入点 ============
     logger.info("="*60)
@@ -342,7 +372,7 @@ def main():
         return
     
     parser = argparse.ArgumentParser(description='王往AI 公众号工作流')
-    parser.add_argument('command', choices=['hunt', 'final', 'research', 'draft', 'refine', 'format', 'todo', 'all', 'help'], help='执行的命令', nargs='?', default='help')
+    parser.add_argument('command', choices=['hunt', 'final', 'research', 'draft', 'refine', 'audit', 'format', 'todo', 'all', 'help'], help='执行的命令', nargs='?', default='help')
     parser.add_argument('-d', '--date', help='指定工作日期 (MMDD 或 YYYY-MM-DD)，默认今天')
     parser.add_argument('-t', '--topic', help='[hunt专用] 指定搜索主题，启用混合优先级(命题作文+自由发挥)')
     parser.add_argument('-s', '--style', default='green', help='[format专用] 排版风格: green/blue/orange/minimal/purple')
@@ -382,6 +412,10 @@ def main():
             run_refiner(instruction, args.date)
         else:
             logger.error("❌ 请提供修改指令")
+    elif args.command == 'audit':
+        check_environment("audit")
+        from agents.auditor import audit_article
+        audit_article()
     else:
         print_help()
 
