@@ -21,10 +21,13 @@ ENV/
 
 # 项目特定（用户数据不提交）
 data/archive/
+data/history.json
+data/cost_log.csv
 logs/
 config/settings.yaml
 
 # Web runtime artifacts
+src/web/.streamlit/
 web/.streamlit/
 
 # AI 生成的配图（保留 .keep 文件）

@@ -21,25 +21,38 @@
 
 👉 日常流程指南详见 [SOP.md](./SOP.md)
 
-### 1. 启动全自动流程
-
-最简单的方式是一键运行完整流程：
+### 1. CLI（推荐：从根目录用 main.py）
 
 ```bash
-# 1. 扫描选题 (建议早/中/晚各运行一次)
+# 打印帮助
+python main.py help
 
-3. **配置环境变量**
-   复制 `.env.example` 为 `.env`，并填入你的 API Key：
-   ```ini
-   DEEPSEEK_API_KEY=sk-xxxxxxxx
-   EXA_API_KEY=xxxxxxxx
-   TAVILY_API_KEY=tvly-xxxxxxxx
-   SILICONFLOW_API_KEY=sk-xxxxxxxx (用于 Flux 绘图)
-   ```
+# 选题扫描
+python main.py hunt
 
-## 🚀 快速上手
+# 全流程一键跑
+python main.py all
+```
 
-### 全自动模式（一键生成）
+### 2. UI（Streamlit 后台）
+
+```bash
+streamlit run src/web/app.py
+```
+
+### 3. 环境变量
+
+复制 `.env.example` 为 `.env`，并填入你的 API Key：
+
+```ini
+DEEPSEEK_API_KEY=sk-xxxxxxxx
+EXA_API_KEY=xxxxxxxx
+TAVILY_API_KEY=tvly-xxxxxxxx
+SILICONFLOW_API_KEY=sk-xxxxxxxx
+```
+
+## 🚀 使用说明
+
 ### 🎯 定向选题说明（-t）
 
 当你使用 `-t` 指定主题时，系统会启用“混合优先级”机制：
@@ -54,24 +67,20 @@
 
 - 如果你发现排版没有更新，请先确认 `final.md` 是否保存；脚本会输出“输入文件最后修改时间”用于排查。
 
-### 🖥️ Streamlit 后台
-
-```bash
-streamlit run web/app.py
-```
-
 功能：交互式选题扫描、草稿/定稿编辑、实时排版预览（支持新增 livid/vue/typewriter 风格）。
 
 ### 📂 项目结构 (v4.3)
 
 ```
 wx_articles/
-├─ web/
-│  └─ app.py                # Streamlit 可视化后台
-├─ run.py                   # CLI 入口（hunt/final/research/draft/refine/audit/format/todo/all）
+├─ main.py                  # Root 入口：转发到 src/run.py（推荐）
+├─ src/
+│  ├─ web/
+│  │  └─ app.py              # Streamlit 可视化后台
+│  ├─ run.py                 # CLI 入口（hunt/final/research/draft/refine/audit/format/todo/all）
+│  └─ agents/                # 各智能体 (trend_hunter/researcher/drafter/refiner/auditor/formatter/…)
 ├─ config/
 │  └─ settings.yaml         # 中央配置（watchlist、pricing、sources）
-├─ agents/                  # 各智能体 (trend_hunter/researcher/drafter/refiner/auditor/formatter/…)
 ├─ data/
 │  └─ archive/YYYY-MM-DD/   # 当日工作区（topics/research/drafts/publish/assets）
 ├─ logs/                    # 运行日志（已在 .gitignore）
@@ -144,8 +153,8 @@ set TAVILY_API_KEY=tvly-your-key
 ## 🧹 Maintenance
 
 - **自动备份**：`draft`/`final` 写入前自动生成 `.bak`（同目录，含时间戳）。如需恢复，直接用最新 `.bak` 覆盖原文件。
-- **事实核查**：`python run.py audit`（或在 Streamlit 后台点击 “Run Audit”）。缺少笔记/定稿时会显示“Audit Skipped”黄色提示，不会崩溃。
-- **排版导出**：`python run.py format --style livid`（或其它风格）。输出 `output.html` 并复制到剪贴板。
+- **事实核查**：`python main.py audit`（或在 Streamlit 后台点击 “Run Audit”）。缺少笔记/定稿时会显示“Audit Skipped”黄色提示，不会崩溃。
+- **排版导出**：`python main.py format --style livid`（或其它风格）。输出 `output.html` 并复制到剪贴板。
 
 ## 🚀 核心模块详解
 
