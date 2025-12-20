@@ -417,7 +417,7 @@ def add_cover_image(content: str, topic: str, illustrator: IllustratorAgent) -> 
     
     return content
 
-def main(topic: str = None, strategic_intent: str = None, visual_script: dict = None, auto_illustrate: bool = True):
+def main(topic: str = None, strategic_intent: str = None, visual_script: dict = None, auto_illustrate: bool = False):
     """
     写作智能体主入口
     
@@ -425,7 +425,7 @@ def main(topic: str = None, strategic_intent: str = None, visual_script: dict = 
         topic: 文章主题/标题
         strategic_intent: 选题策划书
         visual_script: 视觉脚本 (JSON)
-        auto_illustrate: 是否启用自动配图 (v4.1)，默认开启
+        auto_illustrate: 是否启用自动配图 (v4.1)，默认关闭（需手动开启）
     """
     logger.info("%s", "="*60)
     logger.info("✍️ 写作智能体 v4.2 - 王往AI")

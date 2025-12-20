@@ -39,14 +39,22 @@ def load_history():
             return []
     return []
 
-def get_latest_report_content():
-    # Find latest report in 1_topics
+def get_recent_reports(limit=5):
+    """Get recent hunt reports (sorted by mtime desc)"""
     topics_dir = Path(config.get_stage_dir("topics"))
-    reports = list(topics_dir.glob("report_*.md"))
-    if not reports:
-        return None
-    latest_report = max(reports, key=lambda p: p.stat().st_mtime)
-    return latest_report.read_text(encoding="utf-8")
+    reports = sorted(topics_dir.glob("report_*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    recent = []
+    for p in reports[:limit]:
+        try:
+            recent.append({
+                "path": p,
+                "name": p.name,
+                "mtime": datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+                "content": p.read_text(encoding="utf-8"),
+            })
+        except Exception:
+            continue
+    return recent
 
 def parse_topics_from_report(content):
     """Parse topics from the report markdown content"""
@@ -86,6 +94,71 @@ def save_selection(topic):
     trend_hunter.save_topic_to_history(topic['title'], topic['anchor'])
     st.success(f"Selected: {topic['title']}")
 
+
+def read_file_safe(path: Path, max_chars=4000):
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8")
+        return text if len(text) <= max_chars else text[:max_chars] + "\n\n... (truncated)"
+    except Exception:
+        return None
+
+
+def render_file_preview(title, path, height=220, key_suffix: str = ""):
+    """Render a small read-only preview of a file if it exists"""
+    st.markdown(f"**{title}**")
+    p = Path(path)
+    safe_suffix = key_suffix or "default"
+    if p.exists():
+        content = p.read_text(encoding="utf-8")
+        st.text_area(
+            label=f"{title} preview",
+            value=content[:2000],
+            height=height,
+            key=f"preview_{p.name}_{safe_suffix}",
+            label_visibility="collapsed",
+            disabled=True
+        )
+    else:
+        st.info(f"Not found: {p.name}")
+
+
+def _urlencode_query(q: str) -> str:
+    try:
+        from urllib.parse import quote_plus
+        return quote_plus(q)
+    except Exception:
+        return q
+
+
+def _extract_image_placeholders(md: str):
+    """Extract image placeholders from markdown."""
+    todos = []
+    autos = []
+    covers = []
+
+    if not md:
+        return {"todo": [], "auto_img": [], "cover_prompt": []}
+
+    for m in re.finditer(r">\s*TODO:\s*\[(.*?)\]\s*(?:\((.*?)\))?", md):
+        desc = (m.group(1) or "").strip()
+        params = (m.group(2) or "").strip()
+        # try to read '搜索关键词: xxx'
+        kw = ""
+        kw_m = re.search(r"搜索关键词\s*[:：]\s*([^\)]*)", params)
+        if kw_m:
+            kw = kw_m.group(1).strip()
+        todos.append({"desc": desc, "keywords": kw, "params": params})
+
+    for m in re.finditer(r">\s*AUTO_IMG:\s*(.+?)(?:\n|$)", md):
+        autos.append({"prompt": (m.group(1) or "").strip()})
+
+    for m in re.finditer(r">\s*COVER_PROMPT:\s*(.+?)(?:\n|$)", md):
+        covers.append({"prompt": (m.group(1) or "").strip()})
+
+    return {"todo": todos, "auto_img": autos, "cover_prompt": covers}
+
 # ================= Sidebar =================
 
 st.sidebar.title("📚 History")
@@ -105,34 +178,144 @@ for item in reversed(history):
     st.sidebar.text(f"{topic}\n({angle})")
     st.sidebar.markdown("---")
 
-# Workflow actions
-st.sidebar.markdown("### ⚙️ Workflow Actions")
-if st.sidebar.button("🏆 1. Generate Decision", use_container_width=True):
-    with st.sidebar.spinner("Generating FINAL_DECISION..."):
-        try:
-            config.set_working_date(date_str)
-            trend_hunter.final_summary()
-            st.sidebar.success("Decision generated!")
-        except Exception as e:
-            st.sidebar.error(f"Failed: {e}")
+# ================= Sidebar: Editor Toolkit =================
 
-if st.sidebar.button("🔬 2. Start Research", use_container_width=True):
-    with st.sidebar.spinner("Running Researcher..."):
-        try:
-            config.set_working_date(date_str)
-            cli_run.run_researcher()
-            st.sidebar.success("Research completed!")
-        except Exception as e:
-            st.sidebar.error(f"Failed: {e}")
+st.sidebar.markdown("### 🧰 Editor Toolkit")
 
-if st.sidebar.button("✍️ 3. Write Draft", use_container_width=True):
-    with st.sidebar.spinner("Running Drafter..."):
-        try:
-            config.set_working_date(date_str)
-            cli_run.run_drafter()
-            st.sidebar.success("Draft generated!")
-        except Exception as e:
-            st.sidebar.error(f"Failed: {e}")
+final_file_sidebar = Path(config.get_final_file())
+audit_file_sidebar = Path(config.get_today_file("audit_report.md", stage="publish"))
+
+with st.sidebar.expander("✨ Refine (润色)", expanded=False):
+    refine_mode = st.radio(
+        "Mode",
+        ["Manual instruction", "Fix based on Audit"],
+        index=0,
+        key="toolkit_refine_mode",
+        horizontal=False,
+    )
+
+    default_instruction = "整体润色并强化逻辑连贯，突出价值"
+    if refine_mode == "Fix based on Audit":
+        default_instruction = "请基于审计报告逐条修正：所有事实错误/夸大描述/缺少来源的断言，并补充必要说明；保持结构与 TODO/配图占位符不变。"
+
+    toolkit_refine_instruction = st.text_area(
+        "Instruction",
+        value=default_instruction,
+        height=120,
+        key="toolkit_refine_instruction",
+    )
+
+    if st.button("Run Refine → writes final.md", key="toolkit_refine_btn", use_container_width=True):
+        if not toolkit_refine_instruction.strip():
+            st.warning("请输入润色指令")
+        else:
+            with st.spinner("Refining..."):
+                try:
+                    config.set_working_date(date_str)
+                    refiner.refine_article(toolkit_refine_instruction.strip())
+                    st.success("Refine 完成：final.md 已更新")
+                except Exception as e:
+                    st.error(f"Refine failed: {e}")
+
+    if final_file_sidebar.exists():
+        st.caption("Preview final.md")
+        st.text_area(
+            "final.md preview",
+            value=final_file_sidebar.read_text(encoding="utf-8")[:1500],
+            height=180,
+            label_visibility="collapsed",
+            disabled=True,
+            key="toolkit_final_preview",
+        )
+
+with st.sidebar.expander("🕵️ Audit (事实核查)", expanded=False):
+    if st.button("Run Audit", key="toolkit_audit_btn", use_container_width=True):
+        with st.spinner("Auditing..."):
+            try:
+                config.set_working_date(date_str)
+                report = auditor.audit_article()
+                if isinstance(report, str) and report.strip().startswith("## ⚠️ Audit Skipped"):
+                    st.warning("Audit skipped（缺少输入或为空）。")
+                else:
+                    st.success("Audit completed")
+            except Exception as e:
+                st.error(f"Audit failed: {e}")
+
+    if audit_file_sidebar.exists():
+        st.caption("Preview audit_report.md")
+        st.text_area(
+            "audit preview",
+            value=audit_file_sidebar.read_text(encoding="utf-8")[:2000],
+            height=220,
+            label_visibility="collapsed",
+            disabled=True,
+            key="toolkit_audit_preview",
+        )
+    else:
+        st.info("暂无 audit_report.md")
+
+with st.sidebar.expander("🖼️ Images (手动控制)", expanded=False):
+    st.write("已关闭 Draft 阶段的自动配图（避免浪费 token）。")
+    st.caption("流程建议：先点搜索链接挑图；如果挑不到，再手动决定是否用 AI 生成。")
+
+    if not final_file_sidebar.exists():
+        st.info("先生成 draft/final 后，这里会显示配图占位符与搜索链接。")
+    else:
+        md = final_file_sidebar.read_text(encoding="utf-8")
+        items = _extract_image_placeholders(md)
+
+        st.write(f"COVER_PROMPT: {len(items['cover_prompt'])}")
+        st.write(f"AUTO_IMG: {len(items['auto_img'])}")
+        st.write(f"TODO: {len(items['todo'])}")
+
+        st.markdown("---")
+        st.markdown("**封面/素材：搜索链接（不生成、不落本地）**")
+
+        # COVER
+        if items["cover_prompt"]:
+            with st.expander("COVER_PROMPT", expanded=False):
+                for i, c in enumerate(items["cover_prompt"], 1):
+                    q = c["prompt"]
+                    g = f"https://www.google.com/search?tbm=isch&q={_urlencode_query(q)}"
+                    b = f"https://www.bing.com/images/search?q={_urlencode_query(q)}"
+                    st.markdown(f"**{i}.** {q}")
+                    st.markdown(f"- Google: {g}")
+                    st.markdown(f"- Bing: {b}")
+
+        # AUTO_IMG
+        if items["auto_img"]:
+            with st.expander("AUTO_IMG", expanded=False):
+                for i, a in enumerate(items["auto_img"], 1):
+                    q = a["prompt"]
+                    g = f"https://www.google.com/search?tbm=isch&q={_urlencode_query(q)}"
+                    b = f"https://www.bing.com/images/search?q={_urlencode_query(q)}"
+                    st.markdown(f"**{i}.** {q}")
+                    st.markdown(f"- Google: {g}")
+                    st.markdown(f"- Bing: {b}")
+
+        # TODO
+        if items["todo"]:
+            with st.expander("TODO (截图/配图需求)", expanded=True):
+                for i, t in enumerate(items["todo"], 1):
+                    base_q = t["keywords"] or t["desc"]
+                    base_q = base_q.strip() if base_q else ""
+                    if not base_q:
+                        continue
+                    # A couple of opinionated query expansions as "AI search" hints
+                    q1 = base_q
+                    q2 = f"{base_q} screenshot"
+                    g1 = f"https://www.google.com/search?tbm=isch&q={_urlencode_query(q1)}"
+                    b1 = f"https://www.bing.com/images/search?q={_urlencode_query(q1)}"
+                    g2 = f"https://www.google.com/search?tbm=isch&q={_urlencode_query(q2)}"
+                    b2 = f"https://www.bing.com/images/search?q={_urlencode_query(q2)}"
+                    st.markdown(f"**{i}.** {t['desc']}")
+                    if t["keywords"]:
+                        st.caption(f"搜索关键词: {t['keywords']}")
+                    st.markdown(f"- Google: {g1}")
+                    st.markdown(f"- Bing: {b1}")
+                    st.markdown(f"- Google (screenshot): {g2}")
+                    st.markdown(f"- Bing (screenshot): {b2}")
+                    st.markdown("---")
 
 # ================= Main Interface =================
 
@@ -153,45 +336,142 @@ with tab1:
     if start_btn:
         with st.status("Scanning Trends...", expanded=True) as status:
             st.write("Initializing Hunter Agent...")
-            # Capture output if possible, but trend_hunter logs to stdout/file
-            # We will just run it and let it produce the file
             try:
+                config.set_working_date(date_str)
                 trend_hunter.main(topic=directed_topic if directed_topic else None)
                 status.update(label="Scan Complete!", state="complete", expanded=False)
             except Exception as e:
                 status.update(label="Scan Failed", state="error")
                 st.error(f"Error: {e}")
 
-    # Display Results
-    report_content = get_latest_report_content()
-    
-    if report_content:
-        st.markdown("### Latest Scan Results")
-        with st.expander("Raw Report Content", expanded=False):
-            st.markdown(report_content)
-        
-        topics = parse_topics_from_report(report_content)
-        
-        if topics:
-            st.subheader("Detected Topics")
-            for i, t in enumerate(topics):
-                # Create a card-like layout
-                with st.container():
-                    st.markdown(f"#### {t['title']}")
-                    c1, c2 = st.columns([3, 1])
-                    with c1:
-                        st.markdown(f"**Anchor:** {t['anchor']}")
-                        st.markdown(f"**Value:** {t['value']}")
-                        st.markdown(f"**Reason:** {t['reason']}")
-                    with c2:
-                        st.markdown(f"**Rating:** {t['rating']}")
-                        if st.button(f"Select #{i+1}", key=f"select_{i}"):
-                            save_selection(t)
-                    st.divider()
-        else:
-            st.info("No structured topics found in the latest report.")
+    # Display multiple recent scans
+    reports = get_recent_reports(limit=5)
+    if reports:
+        st.markdown("### Recent Scans (latest 5)")
+        for idx, r in enumerate(reports):
+            with st.expander(f"{r['name']} · {r['mtime']}", expanded=(idx == 0)):
+                st.markdown("**Raw Report**")
+                st.markdown(r["content"])
+                
+                topics = parse_topics_from_report(r["content"])
+                if topics:
+                    st.markdown("**Detected Topics**")
+                    for i, t in enumerate(topics):
+                        with st.container():
+                            st.markdown(f"#### {t['title']}")
+                            c1, c2 = st.columns([3, 1])
+                            with c1:
+                                st.markdown(f"**Anchor:** {t['anchor']}")
+                                st.markdown(f"**Value:** {t['value']}")
+                                st.markdown(f"**Reason:** {t['reason']}")
+                            with c2:
+                                st.markdown(f"**Rating:** {t['rating']}")
+                                if st.button(f"Select #{idx+1}-{i+1}", key=f"select_{idx}_{i}"):
+                                    save_selection(t)
+                                    st.info("已记录到历史；后续可运行 Final Decision、Research、Draft。")
+                            st.divider()
+                else:
+                    st.info("No structured topics found in this report.")
     else:
         st.info("No reports found. Start a scan to generate topics.")
+
+    # Workflow chain (per SOP)
+    st.markdown("---")
+    st.subheader("🧭 Workflow (SOP)")
+    colw1, colw2 = st.columns(2)
+
+    topics_dir = Path(config.get_stage_dir("topics"))
+    final_decision_file = topics_dir / "FINAL_DECISION.md"
+    research_notes_file = Path(config.get_research_notes_file())
+    draft_file = Path(config.get_draft_file())
+    final_file = Path(config.get_final_file())
+    html_file = Path(config.get_html_file())
+    audit_file = Path(config.get_today_file("audit_report.md", stage="publish"))
+
+    with colw1:
+        st.markdown("**Step 1 · Final Decision**")
+        if st.button("🏆 Generate Decision", key="btn_final_decision", use_container_width=True):
+            with st.spinner("Generating FINAL_DECISION..."):
+                try:
+                    config.set_working_date(date_str)
+                    trend_hunter.final_summary()
+                    st.success("FINAL_DECISION.md generated!")
+                except Exception as e:
+                    st.error(f"Failed: {e}")
+        render_file_preview("FINAL_DECISION.md (topics)", final_decision_file, height=180, key_suffix="workflow_final_decision")
+
+        st.markdown("---")
+        st.markdown("**Step 3 · Draft**")
+        if st.button("✍️ Write Draft", key="btn_draft", use_container_width=True):
+            with st.spinner("Running Drafter..."):
+                try:
+                    config.set_working_date(date_str)
+                    cli_run.run_drafter()
+                    st.success("Draft generated!")
+                except Exception as e:
+                    st.error(f"Failed: {e}")
+        render_file_preview("draft.md", draft_file, height=180, key_suffix="workflow_draft")
+
+    with colw2:
+        st.markdown("**Step 2 · Research**")
+        if st.button("🔬 Start Research", key="btn_research", use_container_width=True):
+            with st.spinner("Running Researcher..."):
+                try:
+                    config.set_working_date(date_str)
+                    cli_run.run_researcher()
+                    st.success("Research completed!")
+                except Exception as e:
+                    st.error(f"Failed: {e}")
+        render_file_preview("notes.txt (research)", research_notes_file, height=180, key_suffix="workflow_research")
+
+        st.markdown("---")
+        st.markdown("**Step 4 · Refine (可选)**")
+        refine_instruction = st.text_input("Refine instruction", value="整体润色并强化逻辑连贯，突出价值", key="refine_instruction_workflow")
+        if st.button("✨ Refine Final.md", key="btn_refine", use_container_width=True):
+            if not refine_instruction.strip():
+                st.warning("请输入润色指令")
+            else:
+                with st.spinner("Refining..."):
+                    try:
+                        config.set_working_date(date_str)
+                        refiner.refine_article(refine_instruction.strip())
+                        st.success("Refine 完成，已写入 final.md")
+                    except Exception as e:
+                        st.error(f"Failed: {e}")
+        render_file_preview("final.md", final_file, height=140, key_suffix="workflow_refine_final")
+
+        st.markdown("---")
+        st.markdown("**Step 5 · Audit (可选)**")
+        if st.button("🕵️ Run Audit", key="btn_audit", use_container_width=True):
+            with st.spinner("Auditing..."):
+                try:
+                    report = auditor.audit_article()
+                    if isinstance(report, str) and report.strip().startswith("## ⚠️ Audit Skipped"):
+                        st.warning(report)
+                    elif isinstance(report, str):
+                        st.success("Audit completed. 报告见下方预览")
+                    else:
+                        st.info("Audit completed. See logs/output for details.")
+                except Exception as e:
+                    st.error(f"Audit failed: {e}")
+        if audit_file.exists():
+            render_file_preview("audit_report.md", audit_file, height=140, key_suffix="workflow_audit")
+        else:
+            st.info("暂无 audit_report.md，可运行 Audit 获取。")
+
+        st.markdown("---")
+        st.markdown("**Step 6 · Format (HTML)**")
+        fmt_style = st.selectbox("Style", ["green", "blue", "orange", "minimal", "purple", "livid", "vue", "typewriter"], key="fmt_style_sidebar")
+        if st.button("🖨️ Generate HTML", key="btn_format", use_container_width=True):
+            with st.spinner("Formatting to HTML..."):
+                try:
+                    config.set_working_date(date_str)
+                    cli_run.run_formatter(style=fmt_style)
+                    st.success("HTML generated (output.html)!")
+                except Exception as e:
+                    st.error(f"Failed: {e}")
+        render_file_preview("final.md", final_file, height=120, key_suffix="workflow_format_final")
+        render_file_preview("output.html (raw)", html_file, height=120, key_suffix="workflow_format_html")
 
 # --- Tab 2: Editor & Preview ---
 with tab2:
@@ -246,42 +526,6 @@ with tab2:
                 f.write(new_content)
             st.toast("Saved!", icon="💾")
 
-        # Refine Section
-        st.markdown("---")
-        st.subheader("✨ One-click Polish")
-        refine_instruction = st.text_input("Refinement Instruction", placeholder="e.g. Make the intro more engaging")
-        if st.button("Refine Article"):
-            if not refine_instruction:
-                st.warning("Please enter an instruction.")
-            else:
-                with st.spinner("Refining..."):
-                    # Save current content first to ensure refiner sees latest
-                    with open(selected_file_path, "w", encoding="utf-8") as f:
-                        f.write(st.session_state.editor_content)
-                    
-                    # Call refiner
-                    try:
-                        # Depending on implementation, refiner modifies final.md or draft.md
-                        # We should make sure we are editing the right file context
-                        # refiner.refine_article writes to final.md usually
-                        refiner.refine_article(refine_instruction)
-                        
-                        # Reload content from FINAL file (since refiner outputs there)
-                        # Switch selection to Final if not already
-                        target_file = final_file
-                        with open(target_file, "r", encoding="utf-8") as f:
-                            refined_content = f.read()
-                        
-                        st.session_state.editor_content = refined_content
-                        # Update the file if we were looking at draft
-                        if selected_file_path != target_file:
-                            st.toast("Refined content saved to Final.md. Please switch to Final to view.", icon="ℹ️")
-                        else:
-                            st.rerun()
-                            
-                    except Exception as e:
-                        st.error(f"Refinement failed: {e}")
-
     with col_prev:
         st.subheader("Real-time Preview")
         
@@ -304,28 +548,3 @@ with tab2:
                 st.error(f"Preview Error: {e}")
         else:
             st.write("No content to preview.")
-
-    st.markdown("---")
-    st.subheader("🕵️ Fact Check (Audit)")
-    if st.button("Run Audit"):
-        with st.spinner("Auditing..."):
-            try:
-                report = auditor.audit_article()
-                if isinstance(report, str) and report.strip().startswith("## ⚠️ Audit Skipped"):
-                    st.warning(report)
-                elif isinstance(report, str):
-                    with st.expander("Audit Report", expanded=True):
-                        st.markdown(report)
-                else:
-                    st.info("Audit completed. See logs/output for details.")
-            except Exception as e:
-                st.error(f"Audit failed: {e}")
-
-    # Audit summary display (if exists)
-    audit_file = Path(config.get_today_file("audit_report.md", stage="publish"))
-    if audit_file.exists():
-        st.markdown("---")
-        st.subheader("📋 Summary of Audit")
-        audit_content = audit_file.read_text(encoding="utf-8")
-        with st.expander("View audit report", expanded=False):
-            st.markdown(audit_content)

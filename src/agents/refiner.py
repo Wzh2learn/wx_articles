@@ -135,13 +135,24 @@ def refine_article(instruction: str, date: str = None):
         logger.info("📚 已加载研究笔记: %s 字符", len(notes_content))
     else:
         logger.warning("⚠️ 未找到研究笔记，将仅基于草稿进行修改")
-    
+
+    # v4.3: 读取审计报告作为修正依据
+    audit_content = ""
+    audit_file = config.get_today_file("audit_report.md", stage="publish")
+    if os.path.exists(audit_file):
+        with open(audit_file, "r", encoding="utf-8") as f:
+            audit_content = f.read()
+        logger.info("🕵️ 已加载审计报告: %s 字符", len(audit_content))
+
     # 构建 User Prompt - 三方信息融合
     user_prompt = f"""【修改指令】：
 {instruction}
 
 【研究笔记 - 事实来源，请确保修改内容与此一致】：
 {notes_content[:6000] if notes_content else '（无笔记）'}
+
+【审计报告 - 发现的问题（如有），请参考修正】：
+{audit_content[:2000] if audit_content else '（无审计报告）'}
 
 【文章原稿 - 保持结构，定向修改】：
 {content}
