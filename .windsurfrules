@@ -1,0 +1,52 @@
+﻿# wx_articles - Project Rules (Architect Mode, deep dive)
+
+## 0) Rule Priority
+- Project docs outrank generic rules: [README.md](cci:7://file:///d:/AIlearn/wx_articles/README.md:0:0-0:0), [SOP.md](cci:7://file:///d:/AIlearn/wx_articles/SOP.md:0:0-0:0), [config/settings.yaml](cci:7://file:///d:/AIlearn/wx_articles/config/settings.yaml:0:0-0:0), this [.windsurfrules](cci:7://file:///d:/AIlearn/AlgoQuest3/.windsurfrules:0:0-0:0).
+- If a stage has its own instructions (agents or stage-specific md), follow them first.
+
+## 1) Context-First Workflow
+- Before edits: read nearest `.md` in scope (README/SOP/stage docs). Do not scan all agents—open only the relevant stage (`hunt/final/research/draft/refine/audit/format/todo/all`) plus shared utils.
+- Build a quick map: [src/run.py](cci:7://file:///d:/AIlearn/wx_articles/src/run.py:0:0-0:0) (router), `src/agents/*` (logic), [config.py](cci:7://file:///d:/AIlearn/wx_articles/config.py:0:0-0:0) (paths/env/logging/retry/cost), [config/settings.yaml](cci:7://file:///d:/AIlearn/wx_articles/config/settings.yaml:0:0-0:0) (watchlist, pricing, sources).
+
+## 2) Stack & Execution
+- Python + httpx + OpenAI-compatible LLM calls; Playwright for screenshots; Streamlit optional UI.
+- Primary entry: `python main.py <command>` → [src/run.py](cci:7://file:///d:/AIlearn/wx_articles/src/run.py:0:0-0:0) orchestrates commands: `hunt/final/research/draft/refine/audit/format/todo/all/help`.
+- UI: `streamlit run src/web/app.py`.
+- Working dir per day: `data/archive/YYYY-MM-DD/` with stage folders `1_topics/ … 5_assets/`.
+
+## 3) Safety & Data Integrity
+- Backups: drafter/refiner back up draft/final before write—preserve this; never bypass.
+- Outputs: prefer atomic writes for markdown; never drop user edits in `final.md`.
+- Missing inputs: degrade gracefully (auditor already returns skip markdown); keep explicit user-facing status.
+- No hardcoded secrets; use `.env` / env vars. Keys: `DEEPSEEK_API_KEY`, `EXA_API_KEY`, `TAVILY_API_KEY`, `SILICONFLOW_API_KEY`; proxy via `PROXY_URL`.
+- Respect cost tracking: [config.track_cost](cci:1://file:///d:/AIlearn/wx_articles/config.py:96:0-147:18) already decorates LLM calls; keep or extend when adding new chat calls.
+
+## 4) Agent-Specific Guards (do not break)
+- `trend_hunter`: 3-level fetch (Jina primary/backup → Tavily), history-based dedup with “force-keep least similar” fallback; weighted routes A/B/C; watchlist/radar queries; keep retry/proxy and JSON repair.
+- `researcher`: Exa priority, Tavily fallback, Jina scrape for missing text; Fast Research query generation; synthesize_notes enforces “唯技术论/反套壳” and saves to `notes.txt`; preserve stream + retries.
+- `drafter`: DeepSeek Reasoner; visual_script injection; COVER_PROMPT + AUTO_IMG/TODO handling; auto screenshots via `screenshotter` and AI images via `illustrator`; backups before saving drafts.
+- `refiner`: merges instruction + notes + audit + draft/final; preserves TODO/formatting; backs up final.md.
+- `auditor`: compares notes vs final; writes `publish/audit_report.md`; skip states acceptable.
+- `formatter`: converts markdown to styled HTML, strips images to placeholders; styles: green/blue/orange/minimal/purple/livid/vue/typewriter.
+- `illustrator`: SiliconFlow Flux; gracefully disabled if no key.
+- `screenshotter`: Playwright headless capture; tolerates timeouts; removes cookie popups.
+- `todo_extractor`: extracts TODOs into `drafts/todo_list.txt`.
+
+## 5) Validation Loop (every change)
+- Minimum: `python -m compileall src` AND `python main.py help`.
+- Targeted: run the smallest command touching the changed stage (e.g., `python main.py hunt` for trend_hunter changes; `python main.py draft` for drafter; `python main.py format --style green` for formatter; `python main.py audit` when touching audit flow).
+- If Playwright/illustrator paths are touched, note required external deps and give manual verification steps.
+
+## 6) Coding Style & Modularity
+- Keep [src/run.py](cci:7://file:///d:/AIlearn/wx_articles/src/run.py:0:0-0:0) thin; put logic in `src/agents/*`.
+- Favor small, composable helpers; avoid introducing `any` (typing matters even in Python via clear data shapes and docs).
+- Preserve retries, proxies, and logging context; no silent exception swallowing.
+- Comment only for non-obvious invariants (e.g., dedup fallback, cache hit pricing).
+
+## 7) Windows / PowerShell
+- Use PowerShell 7+ syntax; no `cd` in commands—set `cwd`.
+- Env examples: `$env:DEEPSEEK_API_KEY = "..."`.
+
+## 8) Interaction
+- Keep responses concise; cite file paths with anchors when referencing code.
+- Ask targeted questions only when blocking; otherwise proceed with best defaults.
