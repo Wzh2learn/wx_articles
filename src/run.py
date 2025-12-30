@@ -270,25 +270,26 @@ def run_researcher(topic=None, queries=None, strategic_intent=None):
         fast_research=fast_research  # v4.2: 传递搜索指引
     )
 
-def run_all():
+def run_all(dry_run=False):
     from config import get_today_dir
     today = get_today_dir()
     
-    logger.info("🔄 开始完整工作流 (自动化版)...")
+    logger.info("🔄 开始完整工作流 (自动化版)%s...", " (🧪 DRY RUN)" if dry_run else "")
     logger.info(f"📁 今日工作目录: {today}")
     
     # ============ Phase 1: 选题雷达 ============
     logger.info("="*60)
     logger.info("📡 Phase 1: 选题雷达")
     logger.info("="*60)
-    run_hunter()
+    from agents.trend_hunter import main as hunt_main
+    hunt_main(dry_run=dry_run)
     
     # ============ Phase 2: 综合决策 ============
     logger.info("="*60)
     logger.info("🏆 Phase 2: 综合决策")
     logger.info("="*60)
     from agents.trend_hunter import final_summary
-    final_summary()
+    final_summary(dry_run=dry_run)
     
     # ============ Phase 3: 自动化研究 ============
     logger.info("="*60)
@@ -299,11 +300,21 @@ def run_all():
         topic = parsed.get('topic')
         queries = parsed.get('keywords')
         strategic_intent = parsed.get('strategic_summary')
+        fast_research = parsed.get('fast_research')
     else:
-        topic, queries, strategic_intent = None, None, None
-    notes = run_researcher(topic=topic, queries=queries, strategic_intent=strategic_intent)
+        topic, queries, strategic_intent, fast_research = None, None, None, None
     
-    if not notes:
+    from agents.researcher import ResearcherAgent
+    researcher = ResearcherAgent()
+    notes = researcher.run(
+        topic=topic, 
+        queries=queries or [], 
+        strategic_intent=strategic_intent,
+        fast_research=fast_research,
+        dry_run=dry_run
+    )
+    
+    if not notes and not dry_run:
         logger.warning("⚠️ 研究阶段失败，工作流中断")
         return
     
@@ -318,7 +329,12 @@ def run_all():
     else:
         visual_script = None
         
-    run_drafter(topic=topic, strategic_intent=strategic_intent, visual_script=visual_script)
+    from agents.drafter import main as draft_main
+    draft_main(topic=topic, strategic_intent=strategic_intent, visual_script=visual_script, dry_run=dry_run)
+    
+    if dry_run:
+        logger.info("🧪 [Mock] 完整流程模拟成功。")
+        return
     
     # ============ 人工介入点 ============
     logger.info("="*60)
@@ -427,7 +443,7 @@ def main():
         run_todo()
     elif args.command == 'all':
         check_environment("all")
-        run_all()
+        run_all(dry_run=args.dry_run)
     elif args.command == 'refine':
         # 如果通过 argparse 进入（无参数），交互式获取
         instruction = input("请输入修改意见: ").strip()
