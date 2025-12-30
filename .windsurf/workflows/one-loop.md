@@ -1,17 +1,17 @@
 输出“一页纸使用协议”：
 
-## A) Effect-driven（不确定改哪里/先看效果）
+## A) Effect-driven（内容总监审计与选题发现）
 
-- 先 /persona-wx（注入内容产品目标与质量门槛）
-- 再 /product-review（问题/机会→归因→是否进工程）
-- 如需工程：/prp 或 /bugfix
-- 改完：/review → /release-check
-- 回到 /product-review 复验产品效果
+- 先 /persona-wx（进入内容总监审计模式，发现内容质量或链路痛点）
+- 再 /product-review（针对总监提出的痛点进行归因，决定是否升级引擎）
+- 如需工程：/prp 或 /bugfix（将内容需求转化为技术方案）
+- 改完：/review → /release-check（代码质量与发布校验）
+- 回到 /persona-wx（由总监视角复验产出的内容样张）
 
-## B) Requirement-driven（你已决定要做什么）
+## B) Requirement-driven（已知明确的技术需求）
 
-- 先 /persona-wx（注入约束/红线）
-- 再 /prpify（把口述需求整理成 PRP Input Packet）
+- 先 /persona-wx（由总监注入内容约束与质量红线）
+- 再 /prpify（将需求结构化）
 - 再 /prp（生成可执行蓝图）
 - 实现 → /review → /release-check
 

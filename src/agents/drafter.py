@@ -34,19 +34,48 @@ def _backup_file(path: str):
         shutil.copy(path, backup_path)
         logger.info(f"🛡️ Created backup: {backup_path}")
 
-def get_system_prompt(topic: str = None, strategic_intent: str = None, visual_script: dict = None):
+def get_system_prompt(topic: str = None, strategic_intent: str = None, visual_script: dict = None, mode: str = "expert"):
     """
-    动态生成系统提示词 (注入反套壳/专家人设约束/视觉脚本)
-    包含：
-    1. 时效性注入
-    2. 专家验证约束
-    3. 绝对禁忌 (红线)
-    4. 视觉脚本 (如果存在)
+    动态生成系统提示词 (支持 TRAFFIC_STORM 与 VALUE_HACKER 模式切换)
     """
     today = datetime.now().strftime('%Y年%m月')
     strategic_block = f"\n\n## 🎯 最高指令：选题策划书（必须逐条执行）\n{strategic_intent}\n" if strategic_intent else ""
     topic_block = f"\n\n## 文章标题约束\n文章标题必须使用：{topic}\n" if topic else ""
     
+    # 模式选择
+    if mode == "traffic" or "流量" in (strategic_intent or "") or "爆款" in (strategic_intent or ""):
+        persona_block = """
+## 🚀 流量风暴模式 (TRAFFIC_STORM) 激活
+你的人设是：**好奇心爆表的先行者**。
+你的目标是：**全网破圈，让小白也能看懂并想转发**。
+
+### ✍️ 爆款标题实验室 (Viral Title Lab)
+你必须在文末生成 5 个不同维度的备选标题，必须覆盖以下逻辑：
+1. **反直觉/反常识**：打破读者固有认知（例：别再学Python了，AI时代这才是底层逻辑）
+2. **利益诱导/获得感**：直接告诉用户能得到什么（例：一键搬运全网热点，我是如何用AI实现半自动化副业的）
+3. **损失厌恶/危机感**：不看就会落后或亏损（例：Anthropic突然开源！再不跟上这波Agent浪潮，你将被AI彻底抛弃）
+4. **数字驱动/效率钩子**：具体的数字对比（例：从3小时到3分钟，我是如何用这套工作流重塑效率的）
+5. **社交货币/认知升级**：让转发的人显得很专业（例：巨头们正在合力制定AI新规则：深度解读MCP与Skills生态）
+
+### 写作逻辑变更：
+1. **场景化 Hook**：开头禁止使用“定义”，必须使用“场景”或“故事”。（例：不用“DeepSeek是一款AI”，而用“昨天我试着把工资条发给了DeepSeek...”）
+2. **情绪共鸣**：在文中多使用“离谱”、“真香”、“后悔没早用”等体感词汇。
+3. **利益点前置**：在前 10% 的篇幅里，必须告诉用户：这东西能帮你省多少钱、省多少时间。
+4. **Actionable Widget**：在结尾处必须提供一个“一键上手清单”或“避坑实战指令”，让读者能立即行动。
+5. **短平快排版**：每一段不超过 3 行，多用金句加粗。
+"""
+    else:
+        persona_block = """
+## 🛡️ 价值黑客模式 (VALUE_HACKER) 激活
+你的人设是：**专注 AI 工作流的硬核博主**。
+你的目标是：**建立专业护城河，服务高阶用户**。
+
+### 写作逻辑：
+1. **逻辑严密**：通过深度实测展示技术细节。
+2. **权威判断**：拒绝营销术语，直接给出“是否可用”的结论。
+3. **高阶引导**：重点引导用户使用 API、本地部署和 Prompt 迭代。
+"""
+
     visual_block = ""
     if visual_script:
         vs_str = json.dumps(visual_script, indent=2, ensure_ascii=False)
@@ -70,6 +99,7 @@ def get_system_prompt(topic: str = None, strategic_intent: str = None, visual_sc
 
     return f"""
     {visual_block}
+    {persona_block}
 你叫"王往AI"。热爱新兴技术的探索者，专注 AI 工作流的硬核博主。
 
 ## ⚠️ 时效性要求（重要！）
@@ -217,12 +247,47 @@ def read_notes(filepath):
     with open(filepath, "r", encoding="utf-8") as f:
         return f.read()
 
-def generate_draft(notes, topic: str = None, strategic_intent: str = None, visual_script: dict = None):
-    logger.info("🚀 调用 DeepSeek Reasoner...")
+def generate_draft(notes, topic: str = None, strategic_intent: str = None, visual_script: dict = None, mode: str = "expert", dry_run: bool = False):
+    logger.info("🚀 调用 DeepSeek Reasoner (Mode: %s)%s...", mode, " (🧪 DRY RUN)" if dry_run else "")
+    
+    if dry_run:
+        logger.info("🧪 [Mock] 正在生成模拟文章初稿...")
+        mock_draft = f"""
+# {topic or 'Mock 文章标题'}
+
+这是流量风暴模式下的模拟内容。
+
+## 🔥 痛点：被 AI 坑惨了？
+昨天我试着让 Cursor 帮我写代码，结果它把我的电脑差点搞炸了。
+
+## 💡 解决方案：5个隐藏设置
+其实只要开这几个开关，它就变听话了。
+
+> TODO: [Cursor 设置界面截图] (type="screenshot", url="https://docs.cursor.com")
+
+## 📝 手把手：立规矩
+在 .cursor/rules 里写下你的法律。
+
+## ⚠️ 避坑：不要 Accept All
+永远要审核，不要盲从。
+
+> AUTO_IMG: A futuristic AI assistant following strict digital rules, cyberpunk style
+
+## 🎁 行动清单
+1. 检查安全设置 ✅
+2. 写一份 AGENTS.md 📝
+
+---
+备选标题：
+1. 【反直觉】你的Cursor用错了！
+2. 【利益诱导】5分钟效率翻倍
+"""
+        return mock_draft
+
     with httpx.Client(proxy=PROXY_URL, timeout=REQUEST_TIMEOUT) as http_client:
         client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL, http_client=http_client)
         messages = [
-            {"role": "system", "content": get_system_prompt(topic=topic, strategic_intent=strategic_intent, visual_script=visual_script)},
+            {"role": "system", "content": get_system_prompt(topic=topic, strategic_intent=strategic_intent, visual_script=visual_script, mode=mode)},
             {"role": "user", "content": f"【选题标题】\n{topic or ''}\n\n【选题策划书 / 战略意图（最高指令）】\n{strategic_intent or ''}\n\n【研究笔记】\n{notes}"}
         ]
         try:
@@ -417,7 +482,7 @@ def add_cover_image(content: str, topic: str, illustrator: IllustratorAgent) -> 
     
     return content
 
-def main(topic: str = None, strategic_intent: str = None, visual_script: dict = None, auto_illustrate: bool = False):
+def main(topic: str = None, strategic_intent: str = None, visual_script: dict = None, auto_illustrate: bool = False, mode: str = "expert", dry_run: bool = False):
     """
     写作智能体主入口
     
@@ -426,9 +491,11 @@ def main(topic: str = None, strategic_intent: str = None, visual_script: dict = 
         strategic_intent: 选题策划书
         visual_script: 视觉脚本 (JSON)
         auto_illustrate: 是否启用自动配图 (v4.1)，默认关闭（需手动开启）
+        mode: 写作模式 (expert/traffic)
+        dry_run: 节流模式
     """
     logger.info("%s", "="*60)
-    logger.info("✍️ 写作智能体 v4.2 - 王往AI")
+    logger.info("✍️ 写作智能体 v4.2 - 王往AI (Mode: %s)%s", mode, " (🧪 DRY RUN)" if dry_run else "")
     logger.info("%s", "="*60)
     if visual_script:
         logger.info("🎨 已加载视觉脚本")
@@ -439,13 +506,12 @@ def main(topic: str = None, strategic_intent: str = None, visual_script: dict = 
     logger.info("📖 读取 %s...", notes_file)
     
     notes = read_notes(notes_file)
-    if not notes:
+    if not notes and not dry_run:
         logger.warning("💡 请先在以下位置创建研究笔记：%s", notes_file)
         return
-    logger.info("✓ 共 %s 字符", len(notes))
     
     # Step 1: 生成初稿
-    draft = generate_draft(notes, topic=topic, strategic_intent=strategic_intent, visual_script=visual_script)
+    draft = generate_draft(notes, topic=topic, strategic_intent=strategic_intent, visual_script=visual_script, mode=mode, dry_run=dry_run)
     if not draft:
         return
     

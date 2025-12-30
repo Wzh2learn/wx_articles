@@ -174,13 +174,21 @@ class WebSearchTool:
             # Tavily 需要代理 (如果配置了 PROXY_URL)
             # 使用 trust_env=False 防止读取系统环境变量导致混乱，显式指定 proxy
             proxies = PROXY_URL if PROXY_URL else None
-            with httpx.Client(timeout=30, proxy=proxies) as client:
+            with httpx.Client(timeout=30, proxy=proxies, trust_env=False) as client:
                 @retryable
                 def _post():
-                    return client.post(url, json=payload)
+                    resp = client.post(url, json=payload)
+                    # 如果是 429 (Rate Limit) 或 432 (Tavily Usage Limit)，直接抛出不可重试异常
+                    if resp.status_code in [429, 432]:
+                        log_print(f"      ⚠️ Tavily 额度已耗尽或受限 ({resp.status_code})")
+                        return resp
+                    resp.raise_for_status()
+                    return resp
 
                 resp = _post()
-                resp.raise_for_status()
+                if resp.status_code != 200:
+                    return []
+                
                 data = resp.json()
                 results = []
                 if data.get('answer'):
@@ -245,6 +253,63 @@ def _fetch_single_source(
         return None
 
 
+# ================= 趋势发现器 (Trending Discoverer) =================
+
+class TrendingDiscoverer:
+    """
+    v4.5: 外部趋势接入引擎 (QQ浏览器 Agent / TrendRadar 思路)
+    负责调用第三方 API 或聚合平台热搜，发现非 WATCHLIST 内的爆款话题
+    """
+    def __init__(self, search_tool: Optional["WebSearchTool"] = None):
+        self.search_tool = search_tool
+        self.logger = get_logger(__name__)
+
+    def discover_external_hotspots(self) -> List[str]:
+        """
+        从外部聚合源发现热点。
+        v4.6: 增加 Product Hunt, Hacker News 和 V2EX 的实时信号探测
+        """
+        self.logger.info("   🔍 [TrendingDiscoverer] 正在探测全网社交媒体与即时热搜...")
+        
+        # 1. PH/HN/V2EX 实时信号 (利用 Jina Reader 极速扫描)
+        realtime_queries = [
+            "https://www.producthunt.com",
+            "https://news.ycombinator.com",
+            "https://www.v2ex.com/?tab=hot"
+        ]
+        
+        # 2. 传统热搜探测
+        search_queries = [
+            "微博热搜榜 site:s.weibo.com",
+            "百度热搜 实时",
+            "小红书 爆款 话题",
+            "今日头条 热点新闻"
+        ]
+        
+        results = []
+        
+        # 并发执行实时信号抓取
+        if self.search_tool and self.search_tool.enabled:
+            # 抓取实时信号
+            with httpx.Client(proxy=PROXY_URL, timeout=15) as client:
+                for url in realtime_queries:
+                    try:
+                        resp = client.get(f"https://r.jina.ai/{url}")
+                        if resp.status_code == 200:
+                            # 提取前 500 字，由后续 LLM 提炼
+                            snippet = resp.text[:1000].replace("\n", " ")
+                            results.append(f"Source[{url}]: {snippet}")
+                    except:
+                        continue
+
+            # 抓取搜索热点
+            for q in search_queries:
+                res = self.search_tool.search(q, max_results=2, days=1)
+                for r in res:
+                    results.append(f"{r['title']}: {r['body'][:100]}")
+        
+        return results
+
 def fetch_dynamic_trends(
     client: OpenAI,
     search_tool: Optional["WebSearchTool"] = None
@@ -260,6 +325,12 @@ def fetch_dynamic_trends(
     
     # 数据源配置
     sources = TREND_SOURCES
+    
+    # ===== Phase 0: 外部趋势探测 (TrendingDiscoverer) =====
+    discoverer = TrendingDiscoverer(search_tool)
+    external_hotspots = discoverer.discover_external_hotspots()
+    if external_hotspots:
+        log_print(f"   📡 [外部探测] 获取到 {len(external_hotspots)} 条全网原始热点")
     
     # ===== Phase 1: 并发抓取所有源 =====
     source_contents: Dict[str, Optional[str]] = {}
@@ -284,6 +355,38 @@ def fetch_dynamic_trends(
     # ===== Phase 2: 串行提取关键词（LLM 调用不宜过度并发） =====
     all_keywords: List[str] = []
     
+    # 注入外部热点进行关联分析
+    if external_hotspots:
+        external_context = "\n".join(external_hotspots)
+        prompt = f"""
+        这是当前全网社交媒体的热搜摘要：
+        {external_context}
+        
+        请作为 Agent，执行以下动作：
+        1. 挖掘上述热点中，**哪些可以与 AI 结合**？（例如：'春运' -> 'AI 抢票/攻略', '调休' -> 'AI 自动化办公')
+        2. 给出 2-3 个最具“流量爆发力”的 AI 关联词。
+        3. 只返回具体名词，用英文逗号分隔。如果没有合适的，返回 NONE。
+        """
+        try:
+            @retryable
+            @track_cost(context="discover_ai_hotspots")
+            def _chat_hotspots():
+                return client.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=[
+                        {"role": "system", "content": "你是一个擅长将社会热点与 AI 技术强关联的内容策略专家。"},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3
+                )
+            resp = _chat_hotspots()
+            hot_keywords = [k.strip() for k in resp.choices[0].message.content.split(',') if k.strip() and "NONE" not in k.upper()]
+            if hot_keywords:
+                log_print(f"   🔥 [Agent 关联] 从全网热搜锁定 AI 结合点: {hot_keywords}")
+                all_keywords.extend(hot_keywords)
+        except Exception as e:
+            log_print(f"      ⚠️ 外部热点关联分析失败: {e}")
+
     for src in sources:
         content = source_contents.get(src["name"])
         if content:
@@ -407,10 +510,11 @@ def _extract_keywords_from_single_source(
    - 效率工具 (Notion, Cursor, Obsidian, Arc浏览器)
    - 落地玩法 (AI做PPT, 智能体开发, 本地部署)
    - 行业热点 (AI眼镜, 具身智能)
+   - 社交爆款 (AI 扩图, 证件照, 语音克隆, 手机 Agent 自动化)
 3. 排除娱乐明星和社会新闻。
 4. 如果页面是 RSS XML 格式，请忽略 XML 标签，只提取 Title 中的技术名词。
 5. 返回格式：只返回名词，用英文逗号分隔。如果不确定或无相关内容，返回 "NONE"。
-6. 优先提取**知名科技公司**（如深度求索，智谱, 字节, 腾讯、阿里、OpenAI，Google ，Claude ，Bing ，月之暗面，讯飞，百度，微软，苹果，小红书）发布的**新产品名称**（如 AutoGLM, Sora），降低对不知名小工具的提取权重。
+6. 优先提取**知名科技公司**（如深度求索，智谱, 字节, 腾讯、阿里、OpenAI，Google ，Claude ，Bing ，月之暗面，讯飞，百度，微软，苹果，小红书）发布的**新产品名称**（如 AutoGLM, Sora），以及**在社交媒体（小红书/微博/抖音）上疯传的 AI 玩法**。
 
 示例：
 ❌ 错误：Spring Boot, MySQL, React Hooks
@@ -550,10 +654,15 @@ def get_plan_prompt(history_text: str = "", directed_topic: Optional[str] = None
 你是“王往AI”的首席内容策略官。
 请基于【全网情报】和【心理学策略】，挖掘 3 个最具“爆款潜质”的选题方向。
 
-## 价值公式
-**选题价值** = (信息差 × 认知冲击) + (痛点强度 × 解决效率) - 阅读门槛
+## 价值公式 (流量风暴版)
+**选题价值** = (社会热度 × 好奇心) + (情绪共鸣 × 参与度) - 认知门槛
 
-## 心理学三路策略（必须覆盖至少2路，保证多样性）
+## 策略优先级 (TRAFFIC_STORM)
+1. **大众体感优先**：比起"模型参数"，用户更关心"我手机上的 AI 变聪明了"、"AI 帮我省了 500 块"。
+2. **情绪价值优先**：寻找那些能引发"卧槽"、"离谱"、"真香"、"终于等到"感叹的话题。
+3. **社交货币优先**：让用户转到朋友圈显得自己"懂科技"、"会省钱"、"走在时代前沿"。
+
+## 心理学三路策略（流量加强版）
 1. **A路 - 锚点效应 (借势顶流)**：借助 DeepSeek/Cursor/Gemini 等顶流产品的知名度，关注其"隐藏功能"或"最新玩法"。用户看到熟悉的名字更容易点击。
 2. **B路 - 即时满足 (效能神器)**：寻找真正的"效率神器"，主打"3分钟上手"、"下班早走1小时"。让用户觉得"看完就能用"。
 3. **C路 - 损失厌恶 (避坑/认知)**：
@@ -945,15 +1054,37 @@ def save_report(raw_data: str, analysis: str, directed_topic: Optional[str] = No
     # 保存后自动初始化工作流
     auto_init_workflow()
 
-def main(topic=None):
+def main(topic=None, dry_run=False):
     """
     选题雷达主入口
     参数:
-        topic: 可选，指定搜索主题。若提供，将启用“混合优先级”：主题优先，但仍保留全网随机探索以捕捉突发热点
+        topic: 可选，指定搜索主题。
+        dry_run: 节流模式，不调用 API。
     """
     mode_text = f"定向搜索: {topic}" if topic else "全网雷达"
+    if dry_run:
+        mode_text += " (🧪 DRY RUN)"
+    
     log_print("\n" + "="*60 + f"\n🚀 选题雷达 v4.0 ({mode_text}) - 王往AI\n" + "="*60 + "\n")
     
+    if dry_run:
+        log_print("🧪 [Mock] 正在生成模拟热点报告...")
+        raw_data = "Source[Mock]: Trending AI news about Google Ears and Agentic workflow."
+        analysis = """
+### 选题 1：Google AI耳机深度评测：它真的能“听懂”你的工作流吗？
+* **心理锚点**：锚点效应
+* **核心价值**：抢占AI硬件首发评测认知。
+* **热度评级**：⭐⭐⭐⭐⭐
+* **推荐理由**：Google最新硬件动向。
+
+---
+## 今日主推
+Google AI耳机评测，命中了锚点效应。
+"""
+        save_report(raw_data, analysis, directed_topic=topic)
+        log_print("\n✅ [Mock] 选题雷达完成！")
+        return
+
     search_tool = WebSearchTool()
     
     with httpx.Client(proxy=PROXY_URL, timeout=REQUEST_TIMEOUT) as http_client:
@@ -1029,13 +1160,17 @@ def _generate_topic_insights(freq: Dict[str, int], reports_count: int) -> str:
     return "\n".join(insights)
 
 
-def final_summary():
+def final_summary(dry_run=False):
     """综合当天所有报告，给出最终选题推荐和三个提示词"""
     import glob
     from config import get_today_dir
     
+    title_text = "🎯 综合选题决策 v4.7 - 逻辑修正与主编加权"
+    if dry_run:
+        title_text += " (🧪 DRY RUN)"
+        
     log_print("\n" + "="*60)
-    log_print("🎯 综合选题决策 v4.1 - 整合今日所有报告")
+    log_print(title_text)
     log_print("="*60 + "\n")
     
     # 1. 读取当天所有报告
@@ -1043,36 +1178,91 @@ def final_summary():
     reports = glob.glob(os.path.join(topics_dir, "report_*.md"))
     
     if not reports:
+        if dry_run:
+            log_print("🧪 [Mock] 未找到报告，生成模拟最终决策...")
+            final_report = os.path.join(topics_dir, "FINAL_DECISION.md")
+            mock_decision = """
+### 🏆 今日最终选题
+**标题**：别乱用Cursor了！这5个隐藏设置，让你的AI编程效率翻倍
+**心理锚点**：损失厌恶
+**一句话卖点**：掌握隐藏设置，效率翻倍。
+**关键词**：Cursor, AI编程
+
+### 📡 提示词 1：Fast Research
+```
+1. 搜索 Cursor 最新隐藏设置。
+```
+"""
+            with open(final_report, "w", encoding="utf-8") as f:
+                f.write(f"# 🏆 今日最终选题决策 (🧪 Mock)\n\n{mock_decision}")
+            save_topic_to_history("Cursor 效率设置", "Mock 决策")
+            log_print("\n✅ [Mock] 综合选题完成！")
+            return
         log_print("❌ 今日暂无报告，请先运行 `python run.py hunt`")
         return
     
-    log_print(f"📊 找到 {len(reports)} 份报告：")
+    # 逻辑修正：按时间排序（文件名后缀），识别最后一份报告
+    sorted_reports = sorted(reports)
+    latest_report_path = sorted_reports[-1]
+    
+    log_print(f"📊 找到 {len(reports)} 份报告，最新报告为: {os.path.basename(latest_report_path)}")
+    
+    if dry_run:
+        log_print("🧪 [Mock] 流程验证成功，不执行真实 LLM 分析。")
+        return
+    
     all_content = []
-    for r in sorted(reports):
-        log_print(f"   📄 {os.path.basename(r)}")
+    latest_recommendation = ""
+    
+    for r in sorted_reports:
+        name = os.path.basename(r)
+        log_print(f"   📄 {name}")
         with open(r, "r", encoding="utf-8") as f:
-            all_content.append(f"=== {os.path.basename(r)} ===\n{f.read()}")
+            content = f.read()
+            all_content.append(f"=== {name} ===\n{content}")
+            
+            # 如果是最新报告，尝试提取“今日主推”
+            if r == latest_report_path:
+                match = re.search(r'## 今日主推\s*(.*?)(?:\n\n|$)', content, re.DOTALL)
+                if match:
+                    latest_recommendation = match.group(1).strip()
+                    log_print(f"   ⭐ 已提取最新主推权重: {latest_recommendation[:40]}...")
     
     combined = "\n\n".join(all_content)
     
     # === v4.1: 预处理 - 关键词频率分析 ===
-    log_print("\n🔍 [v4.1] 正在分析关键词热度...")
+    log_print("\n🔍 正在分析关键词热度...")
     topic_freq = _extract_topic_frequencies(combined)
     topic_insights = _generate_topic_insights(topic_freq, len(reports))
     log_print(topic_insights)
     
     # 2. DeepSeek 综合分析
-    log_print("\n🧠 DeepSeek 正在综合分析...")
+    log_print("\n🧠 DeepSeek 正在进行终极裁决...")
     
+    # 增强 Prompt：注入最新主推权重，防止旧报告关键词频率干扰
+    weighted_instruction = ""
+    if latest_recommendation:
+        weighted_instruction = f"""
+    ⭐ **主编特别权重 (High Priority)**：
+    最新的情报报告强烈推荐以下选题：
+    【{latest_recommendation}】
+    
+    除非其他历史报告中的热点具备“压倒性”的即时爆发力（如重大突发发布），否则请**优先遵从**最新的推荐。
+    """
+
     FINAL_PROMPT = f"""
-你是"王往AI"，一个擅长从多份情报中提炼核心选题的公众号主编。
-
-你的任务：综合分析今天的所有选题报告，选出【1个最终选题】，并输出3个结构化提示词。
-
-## 🔥 系统预处理：关键词热度分析
-{topic_insights}
-
-⚠️ **重要指令**：上述高频关键词代表今日持续热点，请在选题时**优先考虑**这些方向！
+    {weighted_instruction}
+    
+    你是"王往AI"，一个擅长从多份情报中提炼核心选题的公众号主编。
+    你的任务：综合分析今天的所有选题报告，选出【1个最终选题】，并输出3个结构化提示词。
+    
+    ## 🔥 系统预处理：关键词热度分析
+    {topic_insights}
+    
+    ⚠️ **重要指令**：
+    1. 上述高频关键词代表今日持续热点，需参考。
+    2. **时效性唯一原则**：越晚生成的报告，权重越高。绝不能因为早上的报告关键词多，就忽略了刚才发生的新热点。
+    3. 如果最新报告的“今日主推”非常明确，且符合当前策略，请直接采用并基于其进行深度发散。
 
 ## 价值公式 (心理学驱动)
 **选题价值** = (信息差 × 认知冲击) + (痛点强度 × 解决效率) - 阅读门槛

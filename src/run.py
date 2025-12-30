@@ -82,8 +82,14 @@ def run_hunter(topic=None):
     from agents.trend_hunter import main
     main(topic=topic)
 
-def run_drafter(topic=None, strategic_intent=None, visual_script=None):
+def run_drafter(topic=None, strategic_intent=None, visual_script=None, mode=None):
     from agents.drafter import main
+    from config import OPERATIONAL_PHASE
+    
+    # 根据优先级决定模式：显式参数 > 全局配置
+    if mode is None:
+        mode = "traffic" if OPERATIONAL_PHASE == "TRAFFIC_STORM" else "expert"
+    
     if topic is None or strategic_intent is None:
         parsed = _load_final_decision()
         if parsed:
@@ -94,7 +100,7 @@ def run_drafter(topic=None, strategic_intent=None, visual_script=None):
             if visual_script is None:
                 visual_script = parsed.get('visual_script')
 
-    main(topic=topic, strategic_intent=strategic_intent, visual_script=visual_script)
+    main(topic=topic, strategic_intent=strategic_intent, visual_script=visual_script, mode=mode)
 
 def run_formatter(style: str = "green"):
     from agents.formatter import main
@@ -379,6 +385,8 @@ def main():
     parser.add_argument('-d', '--date', help='指定工作日期 (MMDD 或 YYYY-MM-DD)，默认今天')
     parser.add_argument('-t', '--topic', help='[hunt专用] 指定搜索主题，启用混合优先级(命题作文+自由发挥)')
     parser.add_argument('-s', '--style', default='green', help='[format专用] 排版风格: green/blue/orange/minimal/purple')
+    parser.add_argument('-m', '--mode', choices=['traffic', 'expert'], help='[draft专用] 写作模式: traffic (流量风暴) / expert (价值黑客)')
+    parser.add_argument('--dry-run', action='store_true', help='节流模式：不调用真实 API，仅验证流程和生成 Mock 内容')
     args = parser.parse_args()
     
     # 设置工作日期
@@ -388,17 +396,29 @@ def main():
 
     if args.command == 'hunt':
         check_environment("hunt")
-        run_hunter(topic=args.topic)
+        from agents.trend_hunter import main as hunt_main
+        hunt_main(topic=args.topic, dry_run=args.dry_run)
     elif args.command == 'final':
         check_environment("final")
         from agents.trend_hunter import final_summary
-        final_summary()
+        final_summary(dry_run=args.dry_run)
     elif args.command == 'research':
         check_environment("research")
-        run_researcher()
+        from agents.researcher import ResearcherAgent
+        parsed = _load_final_decision()
+        if parsed:
+            researcher = ResearcherAgent()
+            researcher.run(
+                topic=parsed.get('topic'),
+                queries=parsed.get('keywords', []),
+                strategic_intent=parsed.get('strategic_summary'),
+                fast_research=parsed.get('fast_research'),
+                dry_run=args.dry_run
+            )
     elif args.command == 'draft':
         check_environment("draft")
-        run_drafter()
+        from agents.drafter import main as draft_main
+        draft_main(mode=args.mode, dry_run=args.dry_run)
     elif args.command == 'format':
         check_environment("format")
         run_formatter(style=args.style)
