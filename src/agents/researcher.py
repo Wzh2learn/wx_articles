@@ -19,6 +19,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Optional, List, Dict, Any
+from pathlib import Path
 from openai import OpenAI
 from tavily import TavilyClient
 from config import (
@@ -313,7 +314,7 @@ class ResearcherAgent:
                 
                 logger.error("❌ 所有获取手段均失败")
 
-    def synthesize_notes(self, items: List[Dict[str, Any]], topic: str, strategic_intent: Optional[str] = None) -> str:
+    def synthesize_notes(self, items: List[Dict[str, Any]], topic: str, strategic_intent: Optional[str] = None, imitation_source: str = "") -> str:
         """
         整理所有素材为笔记 (带批判性评估过滤器)
         
@@ -323,8 +324,11 @@ class ResearcherAgent:
         """
         logger.info("📝 [Step 3] AI 整理笔记...")
         
-        # 拼接所有素材
-        raw_text = ""
+        # 聚合所有文本
+        combined_text = ""
+        if imitation_source:
+            combined_text += f"=== 仿写原文素材 (重点参考) ===\n{imitation_source}\n\n"
+        
         for item in items:
             text = item.get("text", "")
             if not text or len(text.strip()) < 50:
@@ -332,9 +336,9 @@ class ResearcherAgent:
                 continue
                 
             if len(text) > 100:
-                raw_text += f"\n{'='*50}\nSource: {item['url']}\nTitle: {item.get('title')}\n{'='*50}\n{text[:8000]}\n"
+                combined_text += f"\n{'='*50}\nSource: {item['url']}\nTitle: {item.get('title')}\n{'='*50}\n{text[:8000]}\n"
         
-        if not raw_text:
+        if not combined_text:
             return "# 研究失败：未获取到有效内容"
 
         strategic_block = ("\n\n" + "="*20 + "\n" + "【选题策划书 / 战略意图（最高指令）】\n" + (strategic_intent or "") + "\n" + "="*20 + "\n") if strategic_intent else ""
@@ -383,7 +387,7 @@ class ResearcherAgent:
                     model="deepseek-chat",
                     messages=[
                         {"role": "system", "content": prompt},
-                        {"role": "user", "content": f"素材内容：\n{raw_text[:60000]}"} # 控制总长度
+                        {"role": "user", "content": f"素材内容：\n{combined_text[:60000]}"} # 控制总长度
                     ],
                     temperature=0.3,
                     max_tokens=4000,
@@ -531,8 +535,19 @@ class ResearcherAgent:
         # 注意：Perplexity 结果已经自带 content (text 字段)，不需要爬取
         self.scrape_missing_content(results)
 
+        # v5.2: 检查是否有仿写原文素材，如果有，将其加入研究背景
+        imitation_source = ""
+        from config import get_stage_dir
+        source_file = Path(get_stage_dir("research")) / "imitation_source.txt"
+        if source_file.exists():
+            try:
+                imitation_source = source_file.read_text(encoding="utf-8")
+                logger.info("   📄 发现仿写原文素材，已加入研究背景")
+            except Exception as e:
+                logger.warning("   ⚠️ 读取仿写素材失败: %s", e)
+
         # 5. 整理笔记
-        notes = self.synthesize_notes(results, topic, strategic_intent=strategic_intent)
+        notes = self.synthesize_notes(results, topic, strategic_intent=strategic_intent, imitation_source=imitation_source)
 
         # 保存
         notes_file = get_research_notes_file()

@@ -40,8 +40,8 @@ def print_help():
 ║    -d 2025-12-04     指定工作日期 (完整格式)                   ║
 ║                                                              ║
 ║  命令:                                                       ║
-║    hunt    - 🎯 选题雷达 (扫描全网热点，支持 -t 混合优先级)  ║
-║    final   - 🏆 综合决策 (整合多次报告，输出3个提示词)       ║
+║    hunt    - 🎯 选题雷达 (支持 -t 定向/-i 仿写)             ║
+║    final   - 🏆 综合决策 (输出1个最终选题+提示词)           ║
 ║    research- 🔬 研究智能体 (自动搜索、爬取、整理笔记)        ║
 ║    draft   - ✍️ 写作智能体 (读取笔记，生成初稿)              ║
 ║    refine  - ✨ 润色智能体 (定向修改: refine "指令")        ║
@@ -400,6 +400,7 @@ def main():
     parser.add_argument('command', choices=['hunt', 'final', 'research', 'draft', 'refine', 'audit', 'format', 'todo', 'all', 'help'], help='执行的命令', nargs='?', default='help')
     parser.add_argument('-d', '--date', help='指定工作日期 (MMDD 或 YYYY-MM-DD)，默认今天')
     parser.add_argument('-t', '--topic', help='[hunt专用] 指定搜索主题，启用混合优先级(命题作文+自由发挥)')
+    parser.add_argument('-i', '--imitate', help='[hunt专用] 仿写模式：指定参考文章路径(支持 HTML/MD/TXT)或 URL(微信公众号等)')
     parser.add_argument('-s', '--style', default='green', help='[format专用] 排版风格: green/blue/orange/minimal/purple')
     parser.add_argument('-m', '--mode', choices=['traffic', 'expert'], help='[draft专用] 写作模式: traffic (流量风暴) / expert (价值黑客)')
     parser.add_argument('--dry-run', action='store_true', help='节流模式：不调用真实 API，仅验证流程和生成 Mock 内容')
@@ -412,8 +413,14 @@ def main():
 
     if args.command == 'hunt':
         check_environment("hunt")
-        from agents.trend_hunter import main as hunt_main
-        hunt_main(topic=args.topic, dry_run=args.dry_run)
+        if args.imitate:
+            # 仿写模式
+            from agents.trend_hunter import imitate_mode
+            imitate_mode(reference_input=args.imitate, dry_run=args.dry_run)
+        else:
+            # 正常模式
+            from agents.trend_hunter import main as hunt_main
+            hunt_main(topic=args.topic, dry_run=args.dry_run)
     elif args.command == 'final':
         check_environment("final")
         from agents.trend_hunter import final_summary

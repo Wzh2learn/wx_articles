@@ -2,13 +2,14 @@
 
 ## 1. 全天候：极速选题雷达 (随时运行)
 1. **启动扫描**：`python main.py hunt`
-2. **多源并发**：系统现在采用并发探测 Product Hunt, Hacker News, V2EX 和**微信公众号热榜**，速度提升显著。
-3. **最新权重**：可以多次运行 `hunt`。系统在最终决策时会赋予**最后一份报告**最高的决策权重。
+2. **定向搜索**：`python main.py hunt -t "Cursor 技巧"` 指定主题优先
+3. **仿写模式**：`python main.py hunt -i "爆款文章.html"` 或 `python main.py hunt -i "https://mp.weixin.qq.com/s/..."` 分析参考文章后自动定向搜索（支持文件/URL）
+4. **多源并发**：系统采用并发探测 Product Hunt, Hacker News, V2EX 和**微信公众号热榜**，速度提升显著。
 
 ## 2. 定点：综合决策 (推荐 12:00 或 18:00)
 1. **生成决策**：`python main.py final`
-2. **权重校验**：检查输出，确认系统是否采纳了最新的主推选题。
-3. **策略切换**：如果当前是起量期，确保 `config/settings.yaml` 中的 `operational_phase` 设置为 `TRAFFIC_STORM`。
+2. **单选题输出**：v5.0 改为输出 **1 个最终选题**（而非 3 个），便于直接进入 research/draft 流程
+3. **定向优先**：如果当天有 `-t` 定向报告，该选题会被强制优先
 
 ## 3. 自动生产：研究与初稿
 1. **深度研究**：`python main.py research`。系统将优先通过 **Perplexity** 获取深度摘要，再由 Tavily/Exa 补充细节。

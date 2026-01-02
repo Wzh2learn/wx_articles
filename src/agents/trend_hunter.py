@@ -13,11 +13,12 @@ import json
 import re
 import httpx
 import random
+from pathlib import Path
 from difflib import SequenceMatcher
 from json_repair import repair_json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 from bs4 import BeautifulSoup
 from openai import OpenAI
 from config import (
@@ -865,6 +866,25 @@ def step1_broad_scan_and_plan(
             if h.lower() not in directed_topic.lower():
                 targets.append(h)
         targets = targets[:4] # 保持聚焦
+        
+        # === v4.9: 定向搜索增强 - 扩展最新功能关键词 ===
+        log_print(f"   🔍 [定向增强] 扩展搜索: {directed_topic} + 最新功能/更新...")
+        # 针对常见产品的最新功能搜索扩展
+        PRODUCT_FEATURE_EXPANSIONS = {
+            "coze": ["Coze Studio", "Coze IDE", "Coze 对话生成工作流", "Coze 自动创建 Agent"],
+            "cursor": ["Cursor Composer", "Cursor Agent", "Cursor 新功能"],
+            "deepseek": ["DeepSeek V3.2", "DeepSeek Reasoner", "DeepSeek 新功能"],
+            "kimi": ["Kimi 长文本", "Kimi 新功能", "Kimi k2"],
+        }
+        # 查找匹配的产品扩展
+        for product, expansions in PRODUCT_FEATURE_EXPANSIONS.items():
+            if product in directed_topic.lower():
+                for exp in expansions:
+                    exp_query = f"{exp} 最新 功能 更新 2025"
+                    res = search_tool.search(exp_query, max_results=2, topic="news", days=7)
+                    pre_scan_results.extend(res)
+                    log_print(f"      → 扩展搜索: {exp_query} ({len(res)} 结果)")
+                break
     else:
         # 随机模式
         targets = random.sample(WATCHLIST, 3)
@@ -883,10 +903,11 @@ def step1_broad_scan_and_plan(
         # 激活僵尸关键词：同时搜"隐藏功能"和"最新更新"
         queries = [
             f"{t} 隐藏功能 玩法 教程 2025",
-            f"{t} new features latest update" # 英文搜更新往往更准
+            f"{t} new features latest update", # 英文搜更新往往更准
+            f"{t} 最新功能 上线 发布 2025"  # v4.9: 增加最新功能搜索
         ]
         for q in queries:
-            res = search_tool.search(q, max_results=1, topic="news", days=3)
+            res = search_tool.search(q, max_results=2, topic="news", days=7)  # v4.9: 增加结果数和时间范围
             pre_scan_results.extend(res)
         
     # === B路: 随机收益场景 (Life Hack) ===
@@ -1236,53 +1257,99 @@ Google AI耳机评测，命中了锚点效应。
     
     log_print("\n✅ 选题雷达完成！")
 
-def _extract_topic_frequencies(reports_content: str) -> Dict[str, int]:
+def _extract_topic_frequencies(reports_content: str) -> Dict[str, Tuple[int, float, str]]:
     """
-    v4.1: 从多份报告中提取关键词出现频率
-    高频出现的关键词说明热度持续，应优先考虑
+    v4.8: 从多份报告中提取关键词出现频率，带领域权重
+    返回: {keyword: (raw_count, weighted_score, category)}
+    
+    领域敏感度权重 (PRP要求):
+    - 硬核技术类: 2.0
+    - 投资金融类: 0.5
+    - 通用场景类: 1.0 (但在洞察中标记为"修饰语")
     """
     from collections import Counter
     
-    # 定义高价值关键词模式（大厂产品、热门概念）
-    high_value_keywords = [
-        # 大厂产品
-        "DeepSeek", "Cursor", "Gemini", "Claude", "GPT", "Kimi", "Copilot",
-        "Windsurf", "Bolt", "Lovable", "秘塔", "豆包", "通义", "智谱", "AutoGLM",
-        # 热门概念
-        "Agent", "智能体", "MCP", "RAG", "实时翻译", "AI 耳机", "手机助手",
-        "架构图", "流程图", "思维导图", "文档分析", "代码生成",
-        # 效率场景
-        "免费", "平替", "白嫖", "避坑", "翻车"
-    ]
+    # 分类关键词及其权重
+    KEYWORD_CATEGORIES = {
+        # === 硬核技术类 (权重 2.0) ===
+        "tech": {
+            "weight": 2.0,
+            "keywords": [
+                "DeepSeek", "Cursor", "Gemini", "Claude", "GPT", "Kimi", "Copilot",
+                "Windsurf", "Bolt", "Lovable", "秘塔", "豆包", "通义", "智谱", "AutoGLM",
+                "Coze", "Agent", "智能体", "MCP", "RAG", "Workflow", "工作流",
+                "本地部署", "Ollama", "vLLM", "Prompt", "提示词",
+                "架构图", "流程图", "思维导图", "文档分析", "代码生成",
+                "API", "SDK", "开源", "GitHub"
+            ]
+        },
+        # === 投资金融类 (权重 0.5) ===
+        "finance": {
+            "weight": 0.5,
+            "keywords": [
+                "股价", "上市", "财报", "暴涨", "暴跌", "市值", "融资", "IPO",
+                "投资", "股票", "韭菜", "割韭菜", "炒股"
+            ]
+        },
+        # === 通用场景类 (权重 1.0，但标记为修饰语) ===
+        "generic": {
+            "weight": 1.0,
+            "keywords": [
+                "免费", "平替", "白嫖", "避坑", "翻车", "教程", "爆款",
+                "实时翻译", "AI 耳机", "手机助手"
+            ]
+        }
+    }
     
-    freq = Counter()
+    results = {}
     content_lower = reports_content.lower()
     
-    for kw in high_value_keywords:
-        count = content_lower.count(kw.lower())
-        if count > 0:
-            freq[kw] = count
+    for category, config in KEYWORD_CATEGORIES.items():
+        weight = config["weight"]
+        for kw in config["keywords"]:
+            count = content_lower.count(kw.lower())
+            if count > 0:
+                weighted_score = count * weight
+                results[kw] = (count, weighted_score, category)
     
-    return dict(freq.most_common(10))
+    # 按加权分数排序，返回前10
+    sorted_results = dict(sorted(results.items(), key=lambda x: x[1][1], reverse=True)[:10])
+    return sorted_results
 
 
-def _generate_topic_insights(freq: Dict[str, int], reports_count: int) -> str:
+def _generate_topic_insights(freq: Dict[str, Tuple[int, float, str]], reports_count: int) -> str:
     """
-    v4.1: 根据频率统计生成选题洞察，注入到 Prompt 中辅助决策
+    v4.8: 根据频率统计生成选题洞察，带领域标签
+    freq: {keyword: (raw_count, weighted_score, category)}
     """
     if not freq:
         return "暂无高频关键词统计。"
     
-    insights = []
-    insights.append(f"📊 **关键词热度统计** (来自 {reports_count} 份报告)：")
+    CATEGORY_LABELS = {
+        "tech": "🔧 硬核技术",
+        "finance": "💰 金融类(降权)",
+        "generic": "📝 修饰语"
+    }
     
-    for kw, count in freq.items():
-        if count >= 3:
-            insights.append(f"   🔥🔥🔥 **{kw}**: 出现 {count} 次 (极高热度，强烈推荐)")
-        elif count >= 2:
-            insights.append(f"   🔥🔥 **{kw}**: 出现 {count} 次 (高热度)")
-        else:
-            insights.append(f"   🔥 **{kw}**: 出现 {count} 次")
+    insights = []
+    insights.append(f"📊 **关键词热度统计 v4.8** (来自 {reports_count} 份报告，已应用领域权重)：")
+    insights.append("   ⚠️ 注意：技术类关键词权重×2.0，金融类×0.5，修饰语仅供参考")
+    insights.append("")
+    
+    for kw, (raw_count, weighted_score, category) in freq.items():
+        label = CATEGORY_LABELS.get(category, "")
+        
+        if category == "tech":
+            if weighted_score >= 6:
+                insights.append(f"   🔥🔥🔥 **{kw}** [{label}]: {raw_count}次 → 加权{weighted_score:.1f} (极高优先级)")
+            elif weighted_score >= 4:
+                insights.append(f"   🔥🔥 **{kw}** [{label}]: {raw_count}次 → 加权{weighted_score:.1f} (高优先级)")
+            else:
+                insights.append(f"   🔥 **{kw}** [{label}]: {raw_count}次 → 加权{weighted_score:.1f}")
+        elif category == "finance":
+            insights.append(f"   ⚠️ **{kw}** [{label}]: {raw_count}次 → 加权{weighted_score:.1f} (需转化为技术视角)")
+        else:  # generic
+            insights.append(f"   📝 {kw} [{label}]: {raw_count}次 (仅作修饰，不作为核心选题依据)")
     
     return "\n".join(insights)
 
@@ -1292,7 +1359,7 @@ def final_summary(dry_run=False):
     import glob
     from config import get_today_dir
     
-    title_text = "🎯 综合选题决策 v4.7 - 逻辑修正与主编加权"
+    title_text = "🎯 综合选题决策 v5.0 - 单选题确定模式"
     if dry_run:
         title_text += " (🧪 DRY RUN)"
         
@@ -1334,62 +1401,87 @@ def final_summary(dry_run=False):
     
     log_print(f"📊 找到 {len(reports)} 份报告，最新报告为: {os.path.basename(latest_report_path)}")
     
-    if dry_run:
-        log_print("🧪 [Mock] 流程验证成功，不执行真实 LLM 分析。")
-        return
-    
     all_content = []
     latest_recommendation = ""
+    directed_topics = []  # {topic: recommendation}
+    directed_recommendations = {}  # v4.9: 存储每个定向主题的主推内容
     
     for r in sorted_reports:
         name = os.path.basename(r)
-        log_print(f"   📄 {name}")
         with open(r, "r", encoding="utf-8") as f:
             content = f.read()
             all_content.append(f"=== {name} ===\n{content}")
             
+            # 提取报告中的定向搜索主题
+            directed_match = re.search(r'# 🚀 选题雷达报告 v4.0 \(定向搜索: (.*?)\)', content)
+            if directed_match:
+                d_topic = directed_match.group(1).strip()
+                if d_topic not in directed_topics:
+                    directed_topics.append(d_topic)
+                
+                # v4.9: 提取该定向报告的“今日主推”作为选题锚点
+                rec_match = re.search(r'## 今日主推\s*(.*?)(?:\n\n|\n##|$)', content, re.DOTALL)
+                if rec_match:
+                    directed_recommendations[d_topic] = rec_match.group(1).strip()
+            
             # 如果是最新报告，尝试提取“今日主推”
             if r == latest_report_path:
-                match = re.search(r'## 今日主推\s*(.*?)(?:\n\n|$)', content, re.DOTALL)
+                match = re.search(r'## 今日主推\s*(.*?)(?:\n\n|\n##|$)', content, re.DOTALL)
                 if match:
                     latest_recommendation = match.group(1).strip()
-                    log_print(f"   ⭐ 已提取最新主推权重: {latest_recommendation[:40]}...")
-    
+
     combined = "\n\n".join(all_content)
     
     # === v4.1: 预处理 - 关键词频率分析 ===
-    log_print("\n🔍 正在分析关键词热度...")
     topic_freq = _extract_topic_frequencies(combined)
     topic_insights = _generate_topic_insights(topic_freq, len(reports))
-    log_print(topic_insights)
-    
-    # 2. DeepSeek 综合分析
-    log_print("\n🧠 DeepSeek 正在进行终极裁决...")
-    
-    # 增强 Prompt：注入最新主推权重，防止旧报告关键词频率干扰
+
+    # === v4.9: 增强 Prompt - 定向锚点与发散策略 ===
     weighted_instruction = ""
-    if latest_recommendation:
-        weighted_instruction = f"""
-    ⭐ **主编特别权重 (High Priority)**：
-    最新的情报报告强烈推荐以下选题：
-    【{latest_recommendation}】
     
-    除非其他历史报告中的热点具备“压倒性”的即时爆发力（如重大突发发布），否则请**优先遵从**最新的推荐。
+    if directed_topics:
+        # 构建定向主题及其对应的推荐选题
+        directed_anchor_text = ""
+        for dt in directed_topics:
+            rec = directed_recommendations.get(dt, "未提取到具体推荐")
+            directed_anchor_text += f"\n    - **定向主题**: {dt}\n      **该报告主推**: {rec[:200]}..."
+        
+        weighted_instruction += f"""
+    🎯 **定向选题锚点 (ANCHOR - 最高优先级)**：
+    用户通过 `-t` 参数明确指定了以下主题，这是今日选题的「核心锚点」：
+    {directed_anchor_text}
+    
+    🚨 **强制要求 (不可违反)**：
+    1. **第一选题必须是定向主题的「精确执行版」**：基于上述报告主推内容，输出可直接使用的爆款标题。
+    2. **第二、第三选题必须围绕定向主题发散**：允许偏移角度（如避坑、实测、进阶），但不能偏离用户的搜索意图。
+    3. **禁止输出与定向主题无关的选题**：即使其他热点很火，也不能取代定向选题的位置。
+    """
+
+    if latest_recommendation and not directed_topics:
+        # 只有在没有定向主题时，才使用最新报告的主推作为参考
+        weighted_instruction += f"""
+    ⭐ **最新情报参考 (Reference)**：
+    最近的一份报告建议：【{latest_recommendation[:200]}】
     """
 
     FINAL_PROMPT = f"""
     {weighted_instruction}
     
-    你是"王往AI"，一个擅长从多份情报中提炼核心选题的公众号主编。
+    你是"王往AI"，一个**专注硬核 AI 工作流与提效技巧**的技术博主，不是金融分析师，也不是新闻搬运工。
     你的任务：综合分析今天的所有选题报告，选出【1个最终选题】，并输出3个结构化提示词。
+    
+    ## 🧠 核心人设与价值观 (不可违背)
+    1. **唯技术论**：即使是分析公司上市或大厂动作，落脚点也必须是**底层技术、工作流变革、Prompt 技巧**，而非股价、财报或八卦。
+    2. **拒绝投机**：禁止生成纯粹的投资理测、股市分析内容。如果涉及到壁仞科技等公司，必须转化为“国产 GPU 的技术生态挑战”或“AI 算力部署避坑”。
+    3. **硬核优先**：Coze, Cursor, Agent 工作流, 本地部署等内容的权重永远高于简单的“AI 趣闻”。
     
     ## 🔥 系统预处理：关键词热度分析
     {topic_insights}
     
-    ⚠️ **重要指令**：
-    1. 上述高频关键词代表今日持续热点，需参考。
-    2. **时效性唯一原则**：越晚生成的报告，权重越高。绝不能因为早上的报告关键词多，就忽略了刚才发生的新热点。
-    3. 如果最新报告的“今日主推”非常明确，且符合当前策略，请直接采用并基于其进行深度发散。
+    ⚠️ **重要决策原则**：
+    1. **定向指令绝对优先**：如果用户指定了主题（见上文），必须优先以此为中心进行发散。
+    2. **时效性与价值平衡**：越晚生成的报告权重越高，但“硬核价值”是唯一的一票否决权。
+    3. **关键词防干扰**：不要被“避坑”、“免费”等通用高频词带偏，它们只是修饰语，核心必须是具体的技术或产品。
 
 ## 价值公式 (心理学驱动)
 **选题价值** = (信息差 × 认知冲击) + (痛点强度 × 解决效率) - 阅读门槛
@@ -1408,13 +1500,19 @@ def final_summary(dry_run=False):
    - **避坑类**：翻车现场、智商税揭秘，满足损失厌恶心理
 4. **拒绝平庸**：剔除那些"看起来有用但实际没啥用"的工具
 
-## 输出格式
+## 输出格式 (v5.0: 单选题确定模式)
 
-### 🏆 今日最终选题
-**标题**：[爆款标题，15-25字，运用心理学技巧]
+### 🏆 今日最终选题 (THE ONE)
+**标题**：[爆款标题，15-25字，必须紧扣用户的定向搜索意图]
 **心理锚点**：[锚点效应 / 即时满足 / 损失厌恶，选一个主打]
 **一句话卖点**：[用户看完能得到什么？认知升级？解决痛点？避开陷阱？]
 **关键词**：[3-5个搜索关键词，用于后续素材搜集]
+
+### 💡 备选角度 (供人工调整参考，不作为主输出)
+- **角度A**：[从避坑/翻车切入的标题思路]
+- **角度B**：[从效率提升/即时满足切入的标题思路]
+
+---
 
 ### 📡 提示词 1：Fast Research (用于自动研究 / research 阶段)
 ```
@@ -1524,6 +1622,254 @@ def final_summary(dry_run=False):
             log_print(f"❌ 综合分析失败: {e}")
 
     log_print("\n✅ 综合选题完成！")
+
+
+# =============================================================================
+# 仿写模式 (Imitate Mode) v1.0
+# =============================================================================
+
+def _parse_reference_file(file_path: str) -> str:
+    """
+    解析参考文章文件，支持 HTML/MD/TXT 等格式
+    返回纯文本内容
+    """
+    import os
+    
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"参考文章不存在: {file_path}")
+    
+    ext = os.path.splitext(file_path)[1].lower()
+    
+    with open(file_path, "r", encoding="utf-8") as f:
+        raw_content = f.read()
+    
+    # HTML 格式：提取纯文本
+    if ext in [".html", ".htm"]:
+        soup = BeautifulSoup(raw_content, "html.parser")
+        # 移除 script 和 style 标签
+        for tag in soup(["script", "style", "nav", "header", "footer"]):
+            tag.decompose()
+        text = soup.get_text(separator="\n", strip=True)
+        # 清理多余空行
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        return "\n".join(lines)
+    
+    # Markdown 或纯文本：直接返回
+    return raw_content
+
+
+def _fetch_url_content(url: str) -> str:
+    """
+    使用 Jina Reader 抓取 URL 内容
+    """
+    jina_url = f"https://r.jina.ai/{url}"
+    log_print(f"   🌐 正在通过 Jina Reader 抓取: {url}")
+    
+    try:
+        with httpx.Client(proxy=PROXY_URL, timeout=REQUEST_TIMEOUT) as client:
+            resp = client.get(jina_url)
+            resp.raise_for_status()
+            content = resp.text
+            
+            # 保存到本地缓存以便调试
+            from config import get_today_dir
+            import os
+            cache_dir = os.path.join(get_today_dir(), "temp")
+            os.makedirs(cache_dir, exist_ok=True)
+            cache_file = os.path.join(cache_dir, "last_imitate_raw.md")
+            with open(cache_file, "w", encoding="utf-8") as f:
+                f.write(content)
+            log_print(f"   ✅ 抓取成功，已缓存至: {cache_file}")
+            
+            return content
+    except Exception as e:
+        log_print(f"   ❌ URL 抓取失败: {e}")
+        raise
+
+
+def imitate_mode(reference_input: str, dry_run: bool = False):
+    """
+    仿写模式 v1.1：支持本地文件或 URL
+    
+    流程：
+    1. 获取参考内容（本地解析或 URL 抓取）
+    2. LLM 分析：提取主题、关键词、结构、素材类型
+    3. 生成搜索计划
+    4. 执行搜索并生成 report_*.md
+    """
+    log_print("\n" + "="*60)
+    log_print("📝 仿写模式 v1.1 - 爆款内容分析与创作")
+    log_print("="*60 + "\n")
+    
+    # 1. 获取参考内容
+    article_content = ""
+    is_url = reference_input.startswith(("http://", "https://"))
+    
+    if is_url:
+        log_print(f"🔗 检测到 URL 输入: {reference_input}")
+        try:
+            article_content = _fetch_url_content(reference_input)
+        except:
+            return
+    else:
+        log_print(f"📖 正在解析本地参考文章: {reference_input}")
+        try:
+            article_content = _parse_reference_file(reference_input)
+        except Exception as e:
+            log_print(f"   ❌ 解析失败: {e}")
+            return
+
+    try:
+        # 限制长度避免 Token 溢出
+        if len(article_content) > 15000:
+            article_content = article_content[:15000] + "\n\n...(内容已截断)"
+            log_print(f"   ⚠️ 内容过长，已截断至 15000 字符")
+        log_print(f"   ✅ 内容就绪，共 {len(article_content)} 字符")
+    except Exception as e:
+        log_print(f"   ❌ 内容处理失败: {e}")
+        return
+    
+    # 2. LLM 分析文章
+    log_print("\n🧠 DeepSeek 正在分析文章结构与主题...")
+    
+    ANALYZE_PROMPT = """你是内容分析专家。请分析以下爆款文章，提取关键信息用于仿写。
+
+## 分析要求
+请严格按以下 JSON 格式输出（不要输出其他内容）：
+
+```json
+{
+    "topic": "核心主题（一句话，如：Cursor 的隐藏效率技巧）",
+    "keywords": ["关键词1", "关键词2", "关键词3", "关键词4", "关键词5"],
+    "structure": "文章结构（如：痛点引入-方案介绍-案例演示-总结行动）",
+    "material_types": ["素材类型1", "素材类型2"],
+    "psychology": "心理锚点（锚点效应/即时满足/损失厌恶）",
+    "search_queries": ["搜索词1", "搜索词2", "搜索词3"]
+}
+```
+
+## 字段说明
+- topic: 这篇文章的核心主题是什么
+- keywords: 5-8个关键词，用于后续搜索相关素材
+- structure: 文章的逻辑结构
+- material_types: 文章用到的素材类型（如：官方文档、用户案例、竞品对比、截图演示）
+- psychology: 这篇文章主要运用了哪种心理学策略
+- search_queries: 3个最有价值的搜索词，用于找到类似素材"""
+
+    with httpx.Client(proxy=PROXY_URL, timeout=REQUEST_TIMEOUT) as http_client:
+        client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL, http_client=http_client)
+        
+        try:
+            @retryable
+            @track_cost(context="imitate_analyze")
+            def _analyze():
+                return client.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=[
+                        {"role": "system", "content": ANALYZE_PROMPT},
+                        {"role": "user", "content": f"请分析以下文章：\n\n{article_content}"}
+                    ],
+                    response_format={"type": "json_object"}
+                )
+            
+            response = _analyze()
+            analysis_text = response.choices[0].message.content
+            
+            # 解析 JSON
+            try:
+                analysis = json.loads(analysis_text)
+            except:
+                analysis = json.loads(repair_json(analysis_text))
+            
+            log_print(f"   ✅ 分析完成")
+            log_print(f"   📌 主题: {analysis.get('topic', '未知')}")
+            log_print(f"   🏷️ 关键词: {', '.join(analysis.get('keywords', []))}")
+            log_print(f"   🧠 心理锚点: {analysis.get('psychology', '未知')}")
+            
+            if dry_run:
+                log_print("\n🧪 [Dry Run] 分析结果预览:")
+                log_print(json.dumps(analysis, ensure_ascii=False, indent=2))
+                log_print("\n🧪 [Dry Run] 仿写模式验证成功，不执行实际操作。")
+                return
+            
+            # 3. v5.2: 跳过 Hunt 扫描，直接生成最终决策
+            log_print(f"\n🚀 [极速仿写] 跳过扫描，正在直接生成最终决策...")
+            
+            from config import get_stage_dir, get_research_notes_file
+            topics_dir = Path(get_stage_dir("topics"))
+            final_report = topics_dir / "FINAL_DECISION.md"
+            
+            # 保存原文素材到 research 目录，供后续 draft 参考
+            research_dir = Path(get_stage_dir("research"))
+            source_file = research_dir / "imitation_source.txt"
+            with open(source_file, "w", encoding="utf-8-sig") as f:
+                f.write(article_content)
+            log_print(f"   📥 已保存仿写原文素材: {source_file}")
+
+            # 构建符合 FINAL_DECISION.md 格式的内容
+            # 选题 1 为精确仿写版
+            topic_title = analysis.get("topic", "未命名仿写选题")
+            keywords = ", ".join(analysis.get("keywords", []))
+            psychology = analysis.get("psychology", "锚点效应")
+            
+            # 为 Researcher 生成任务描述
+            search_queries = analysis.get("search_queries", [])
+            research_tasks = "\n".join([f"{i+1}. {q}" for i, q in enumerate(search_queries)])
+            
+            final_decision_content = f"""# 🏆 今日最终选题决策 (极速仿写模式)
+
+**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+**仿写来源**: {reference_input if is_url else os.path.basename(reference_input)}
+
+## 输出格式 (v5.0: 单选题确定模式)
+
+### 🏆 今日最终选题 (THE ONE)
+**标题**：{topic_title}
+**心理锚点**：{psychology}
+**一句话卖点**：基于深度仿写分析，旨在重现原文的爆款结构与情绪价值。
+**关键词**：{keywords}
+
+### 💡 备选角度 (仿写模式不提供备选)
+- **角度A**：仿写模式下，系统全力聚焦于唯一目标。
+
+---
+
+### 📡 提示词 1：Fast Research (用于自动研究 / research 阶段)
+```
+请作为研究员，围绕选题《{topic_title}》进行深度搜索和素材搜集：
+1. 核心搜索任务：
+{research_tasks}
+2. 结构参考：
+{analysis.get("structure", "保持原文逻辑结构")}
+3. 重点：结合仿写原文中的素材类型（{", ".join(analysis.get("material_types", []))}），搜集最新的可替代素材。
+```
+
+### 🎨 提示词 2：视觉脚本 (用于配图方案)
+```
+1. 参考原文的视觉风格，为《{topic_title}》准备配图建议。
+2. 重点展示：新版功能的实际界面、操作流程。
+```
+
+### 🎨 视觉配图指南 (Visual Guide)
+**说明**：请为人工配图提供详细的画面建议。
+封面图：[科技感流光背景，突出主题：{topic_title}]
+内页图1：[功能操作截图演示]
+内页图2：[效果对比图]
+"""
+            with open(final_report, "w", encoding="utf-8-sig") as f:
+                f.write(final_decision_content)
+            
+            # 更新历史记录
+            save_topic_to_history(topic_title, f"仿写: {psychology}")
+            
+            log_print(f"✅ 极速仿写完成！FINAL_DECISION.md 已生成。")
+            log_print(f"💡 下一步：直接运行 `python main.py research` 开始深度研究。")
+            
+        except Exception as e:
+            log_print(f"❌ 仿写模式运行失败: {e}")
+            import traceback
+            log_print(traceback.format_exc())
+
 
 if __name__ == "__main__":
     main()

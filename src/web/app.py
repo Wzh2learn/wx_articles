@@ -416,31 +416,6 @@ with tab1:
                     st.success("FINAL_DECISION.md generated!")
                 except Exception as e:
                     st.error(f"Failed: {e}")
-                finally:
-                    st.session_state.processing = False
-                    st.rerun()
-        render_file_preview("FINAL_DECISION.md (topics)", final_decision_file, height=180, key_suffix="workflow_final_decision")
-
-        st.markdown("---")
-        st.markdown("**Step 3 · Draft**")
-        if st.button("✍️ Write Draft", key="btn_draft", use_container_width=True, disabled=st.session_state.processing):
-            st.session_state.processing = True
-            with st.spinner("Running Drafter..."):
-                try:
-                    config.set_working_date(date_str)
-                    cli_run.run_drafter()
-                    st.success("Draft generated!")
-                except Exception as e:
-                    st.error(f"Failed: {e}")
-                finally:
-                    st.session_state.processing = False
-                    st.rerun()
-        render_file_preview("draft.md", draft_file, height=180, key_suffix="workflow_draft")
-
-    with colw2:
-        st.markdown("**Step 2 · Research**")
-        if st.button("🔬 Start Research", key="btn_research", use_container_width=True, disabled=st.session_state.processing):
-            st.session_state.processing = True
             with st.spinner("Running Researcher..."):
                 try:
                     config.set_working_date(date_str)
@@ -514,6 +489,51 @@ with tab1:
                     st.rerun()
         render_file_preview("final.md", final_file, height=120, key_suffix="workflow_format_final")
         render_file_preview("output.html (raw)", html_file, height=120, key_suffix="workflow_format_html")
+
+# === Hunt Controls ===
+with st.sidebar:
+    st.markdown("### 🎯 选题雷达 (Hunt)")
+    hunt_topic = st.text_input("定向搜索主题 (可选)", placeholder="如: Cursor 技巧", key="hunt_topic_input")
+    
+    # v5.1: 仿写模式输入
+    st.markdown("---")
+    st.markdown("📝 **仿写模式**")
+    imitate_input = st.text_input("参考文章 URL 或本地路径", placeholder="https://mp.weixin.qq.com/s/...", key="imitate_input")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("开始扫描", type="primary", key="start_hunt_btn", disabled=st.session_state.get("processing", False)):
+            st.session_state.processing = True
+            st.session_state.hunt_mode = "normal"
+            st.rerun()
+    
+    with col2:
+        if st.button("开始仿写", key="start_imitate_btn", disabled=st.session_state.get("processing", False) or not imitate_input):
+            st.session_state.processing = True
+            st.session_state.hunt_mode = "imitate"
+            st.rerun()
+
+# === Process Handling ===
+if st.session_state.get("processing", False):
+    with st.spinner("🚀 AI 正在全网搜寻情报..."):
+        try:
+            config.set_working_date(date_str)
+            hunt_mode = st.session_state.get("hunt_mode", "normal")
+            
+            if hunt_mode == "imitate":
+                logger.info(f"UI: 启动仿写模式 -> {imitate_input}")
+                trend_hunter.imitate_mode(imitate_input)
+                st.success("✅ 极速仿写完成！已直接生成最终决策，可立即开始深度研究。")
+            else:
+                logger.info(f"UI: 启动扫描模式 -> {hunt_topic}")
+                trend_hunter.main(topic=hunt_topic if hunt_topic else None)
+                st.success("✅ 选题扫描完成！")
+        except Exception as e:
+            st.error(f"❌ 运行失败: {e}")
+        finally:
+            st.session_state.processing = False
+            st.session_state.hunt_mode = None
+            st.rerun()
 
 # --- Tab 2: Editor & Preview ---
 with tab2:
