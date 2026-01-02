@@ -23,7 +23,7 @@ from openai import OpenAI
 from tavily import TavilyClient
 from config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, 
-    TAVILY_API_KEY, EXA_API_KEY,
+    TAVILY_API_KEY, EXA_API_KEY, PERPLEXITY_API_KEY,
     PROXY_URL, REQUEST_TIMEOUT, get_research_notes_file, get_logger, retryable, track_cost
 )
 
@@ -36,7 +36,6 @@ class ResearcherAgent:
     
     def __init__(self):
         # 初始化 DeepSeek 客户端
-        # 使用统一配置中的代理；如不需要代理请在 config.py 中将 PROXY_URL 设为 None
         proxy_url = PROXY_URL
         self.client = OpenAI(
             api_key=DEEPSEEK_API_KEY,
@@ -44,13 +43,59 @@ class ResearcherAgent:
             http_client=httpx.Client(proxy=proxy_url, timeout=REQUEST_TIMEOUT)
         )
         
-        # 初始化 Tavily (备用)
-        self.tavily = TavilyClient(api_key=TAVILY_API_KEY)
-        
-        self.exa_api_key = EXA_API_KEY
+        # 初始化各搜索 API 状态
+        self.tavily_key = TAVILY_API_KEY
+        self.pplx_key = PERPLEXITY_API_KEY
+        self.exa_key = EXA_API_KEY
         self.proxy_url = proxy_url
         
-        logger.info("✅ ResearcherAgent v4.2 初始化完成 (Exa + Tavily + Fast Research)")
+        self.pplx_enabled = bool(self.pplx_key and len(self.pplx_key) > 10)
+        self.tavily_enabled = bool(self.tavily_key and len(self.tavily_key) > 10)
+        self.exa_enabled = bool(self.exa_key and len(self.exa_key) > 10)
+        
+        logger.info("✅ ResearcherAgent v4.3 初始化完成 (Priority: Perplexity -> Tavily -> Exa)")
+
+    def search_perplexity(self, query: str) -> List[Dict[str, Any]]:
+        """Perplexity API: 获取模型生成的摘要作为核心研究素材"""
+        if not self.pplx_enabled: return []
+        logger.info("🔍 [Step 1.1] Perplexity 深度搜索摘要...")
+        url = "https://api.perplexity.ai/chat/completions"
+        payload = {
+            "model": "sonar",
+            "messages": [
+                {"role": "system", "content": "你是一个专业的AI研究助手。请针对用户的查询提供详细、准确且带有来源摘要的回答。输出应包含核心技术点、行业趋势、真实案例以及用户痛点。"},
+                {"role": "user", "content": query}
+            ],
+            "temperature": 0.2,
+            "search_recency_filter": "week"
+        }
+        headers = {
+            "Authorization": f"Bearer {self.pplx_key}",
+            "Content-Type": "application/json"
+        }
+        try:
+            with httpx.Client(timeout=45, proxy=self.proxy_url) as client:
+                @retryable
+                @track_cost(context="perplexity_research")
+                def _post():
+                    return client.post(url, json=payload, headers=headers)
+                
+                resp = _post()
+                if resp.status_code != 200:
+                    logger.warning(f"Perplexity 报错: {resp.status_code}")
+                    return []
+                
+                data = resp.json()
+                content = data['choices'][0]['message']['content']
+                return [{
+                    "url": "https://perplexity.ai",
+                    "title": "Perplexity AI Research Summary",
+                    "text": content,
+                    "source": "Perplexity"
+                }]
+        except Exception as e:
+            logger.error(f"Perplexity 调用失败: {e}")
+            return []
 
     def search_exa(self, topic: str, queries: List[str]) -> List[Dict[str, Any]]:
         """
@@ -78,7 +123,7 @@ class ResearcherAgent:
         # 定义搜索批次
         # 1. 社交媒体专项 (指定域名)
         social_domains = [
-            "mp.weixin.qq.com", "zhihu.com", "weibo.com", 
+            "mp.weixin.qq.com", "weibo.com", 
             "xiaohongshu.com", "v2ex.com", "juejin.cn"
         ]
         
@@ -148,7 +193,11 @@ class ResearcherAgent:
         """
         Tavily 备用搜索 (仅获取 URL，无正文)
         """
+        if not self.tavily_enabled: return []
         logger.info("🔄 [Fallback] 切换至 Tavily 并发搜索...")
+        
+        from tavily import TavilyClient
+        tavily_client = TavilyClient(api_key=self.tavily_key)
         
         all_results = []
         seen_urls = set()
@@ -158,11 +207,11 @@ class ResearcherAgent:
         for q in queries:
             extended_queries.append({"q": q, "type": "general"})
             extended_queries.append({"q": f"{q} site:mp.weixin.qq.com", "type": "wechat"})
-            extended_queries.append({"q": f"{q} site:zhihu.com", "type": "zhihu"})
+            extended_queries.append({"q": f"{q} site:xiaohongshu.com", "type": "xhs"})
         
         @retryable
         def _tavily_search(query: str, limit: int):
-            return self.tavily.search(
+            return tavily_client.search(
                 query=query,
                 search_depth="advanced",
                 max_results=limit,
@@ -293,7 +342,7 @@ class ResearcherAgent:
         prompt = f"""你是一位专业内容研究员和资深技术博主。请根据以下多篇来源文章，为公众号文章《{topic}》整理素材。{strategic_block}
         
         ⚠️ **流量与社交调研增强 (Social Packaging)**：
-        1. **搜集爆款角度**：除了技术实现，必须挖掘该话题在社交媒体（小红书/微博/知乎）上的“爆款因子”。
+        1. **搜集爆款角度**：除了技术实现，必须挖掘该话题在社交媒体（小红书/微博/公众号）上的“爆款因子”。
         2. **神评论与吐槽**：寻找用户对该工具/现象的最真实吐槽、神评论或体感变化描述。
         3. **转发动机**：分析为什么普通人会想转发这篇文章？（是因为能省钱、能装逼、还是能避坑？）
 
@@ -411,11 +460,12 @@ class ResearcherAgent:
 
     def run(self, topic: str, queries: List[str], strategic_intent: Optional[str] = None, fast_research: Optional[str] = None, dry_run: bool = False) -> str:
         logger.info("%s", "="*60)
-        logger.info("🔬 ResearcherAgent v4.2 (Exa AI)%s", " (🧪 DRY RUN)" if dry_run else "")
+        logger.info("🔬 ResearcherAgent v4.3 (Multi-Search)%s", " (🧪 DRY RUN)" if dry_run else "")
         logger.info("📌 选题: %s", topic)
         logger.info("%s", "="*60)
 
         if dry_run:
+            # ... (keep dry run logic)
             logger.info("🧪 [Mock] 正在生成模拟研究笔记...")
             mock_notes = f"""
 ## 1. 社交货币与舆情分析
@@ -442,7 +492,7 @@ class ResearcherAgent:
             notes_file = get_research_notes_file()
             with open(notes_file, "w", encoding="utf-8") as f:
                 intent_section = f"\n\n## 🎯 战略意图摘要\n\n{strategic_intent.strip()}\n" if strategic_intent else ""
-                f.write(f"# 🔬 自动研究笔记 v4.2 (🧪 Mock)\n\n**选题**: {topic}\n**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{intent_section}\n---\n\n{mock_notes}")
+                f.write(f"# 🔬 自动研究笔记 v4.3 (🧪 Mock)\n\n**选题**: {topic}\n**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{intent_section}\n---\n\n{mock_notes}")
             logger.info("📁 [Mock] 笔记已保存: %s", notes_file)
             return mock_notes
 
@@ -453,30 +503,42 @@ class ResearcherAgent:
                 queries = generated_queries + queries  # 合并：精准查询优先
                 queries = list(dict.fromkeys(queries))[:10]  # 去重，限制数量
 
-        # 1. Exa 搜索 (优先) - v4.2: 使用增强后的查询
-        results = self.search_exa(topic, queries)
+        results = []
+        
+        # 1. 首选 Perplexity 获取摘要
+        pplx_results = self.search_perplexity(topic)
+        if pplx_results:
+            results.extend(pplx_results)
+            logger.info("   ✅ 已获取 Perplexity 研究摘要")
 
-        # 2. 如果 Exa 结果太少，使用 Tavily 补充
-        if len(results) < 3:
-            tavily_results = self.search_tavily_fallback(queries)
-            results.extend(tavily_results)
+        # 2. 无论是否有 pplx，都通过 Tavily 或 Exa 获取更多参考链接和正文
+        # 优先 Tavily (因为快且稳)，Exa 作为兜底
+        search_results = []
+        if self.tavily_enabled:
+            search_results = self.search_tavily_fallback(queries)
+        
+        # 3. 如果 Tavily 失败或没结果，尝试 Exa 兜底
+        if not search_results and self.exa_enabled:
+            search_results = self.search_exa(topic, queries)
+            
+        results.extend(search_results)
 
         if not results:
-            logger.warning("⚠️ 未找到任何内容")
+            logger.warning("⚠️ 所有搜索通道均未找到有效内容")
             return ""
 
-        # 3. 补充爬取 (针对 Tavily 来源或 Exa 没抓到正文的)
+        # 4. 补充爬取 (针对 Tavily 来源或 Exa 没抓到正文的)
+        # 注意：Perplexity 结果已经自带 content (text 字段)，不需要爬取
         self.scrape_missing_content(results)
 
-        # 4. 整理笔记
+        # 5. 整理笔记
         notes = self.synthesize_notes(results, topic, strategic_intent=strategic_intent)
 
-        # 保存 - v4.2: 精简战略意图，不再完整复制 FINAL_DECISION
+        # 保存
         notes_file = get_research_notes_file()
         with open(notes_file, "w", encoding="utf-8") as f:
-            # 只保留精简的战略意图摘要
             intent_section = f"\n\n## 🎯 战略意图摘要\n\n{strategic_intent.strip()}\n" if strategic_intent else ""
-            f.write(f"# 🔬 自动研究笔记 v4.2\n\n**选题**: {topic}\n**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{intent_section}\n---\n\n{notes}")
+            f.write(f"# 🔬 自动研究笔记 v4.3\n\n**选题**: {topic}\n**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n{intent_section}\n---\n\n{notes}")
 
         logger.info("📁 笔记已保存: %s", notes_file)
         return notes

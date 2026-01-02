@@ -15,6 +15,7 @@
 
 import sys
 import argparse
+import re
 from pathlib import Path
 
 # Ensure project root (parent of src) is on sys.path
@@ -126,7 +127,6 @@ def _load_final_decision():
     """
     from config import get_today_dir
     import os
-    import re
 
     topics_dir = os.path.join(get_today_dir(), "1_topics")
     final_file = os.path.join(topics_dir, "FINAL_DECISION.md")

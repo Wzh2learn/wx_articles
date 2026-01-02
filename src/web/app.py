@@ -205,10 +205,11 @@ with st.sidebar.expander("✨ Refine (润色)", expanded=False):
         key="toolkit_refine_instruction",
     )
 
-    if st.button("Run Refine → writes final.md", key="toolkit_refine_btn", use_container_width=True):
+    if st.button("Run Refine → writes final.md", key="toolkit_refine_btn", use_container_width=True, disabled=st.session_state.get("processing", False)):
         if not toolkit_refine_instruction.strip():
             st.warning("请输入润色指令")
         else:
+            st.session_state.processing = True
             with st.spinner("Refining..."):
                 try:
                     config.set_working_date(date_str)
@@ -216,6 +217,9 @@ with st.sidebar.expander("✨ Refine (润色)", expanded=False):
                     st.success("Refine 完成：final.md 已更新")
                 except Exception as e:
                     st.error(f"Refine failed: {e}")
+                finally:
+                    st.session_state.processing = False
+                    st.rerun()
 
     if final_file_sidebar.exists():
         st.caption("Preview final.md")
@@ -229,7 +233,8 @@ with st.sidebar.expander("✨ Refine (润色)", expanded=False):
         )
 
 with st.sidebar.expander("🕵️ Audit (事实核查)", expanded=False):
-    if st.button("Run Audit", key="toolkit_audit_btn", use_container_width=True):
+    if st.button("Run Audit", key="toolkit_audit_btn", use_container_width=True, disabled=st.session_state.get("processing", False)):
+        st.session_state.processing = True
         with st.spinner("Auditing..."):
             try:
                 config.set_working_date(date_str)
@@ -240,6 +245,9 @@ with st.sidebar.expander("🕵️ Audit (事实核查)", expanded=False):
                     st.success("Audit completed")
             except Exception as e:
                 st.error(f"Audit failed: {e}")
+            finally:
+                st.session_state.processing = False
+                st.rerun()
 
     if audit_file_sidebar.exists():
         st.caption("Preview audit_report.md")
@@ -336,6 +344,7 @@ with tab1:
     if start_btn:
         with st.status("Scanning Trends...", expanded=True) as status:
             st.write("Initializing Hunter Agent...")
+            st.session_state.processing = True
             try:
                 config.set_working_date(date_str)
                 trend_hunter.main(topic=directed_topic if directed_topic else None)
@@ -343,6 +352,9 @@ with tab1:
             except Exception as e:
                 status.update(label="Scan Failed", state="error")
                 st.error(f"Error: {e}")
+            finally:
+                st.session_state.processing = False
+                st.rerun()
 
     # Display multiple recent scans
     reports = get_recent_reports(limit=5)
@@ -378,6 +390,11 @@ with tab1:
     # Workflow chain (per SOP)
     st.markdown("---")
     st.subheader("🧭 Workflow (SOP)")
+    
+    # Use session state to store processing status to prevent redundant clicks
+    if "processing" not in st.session_state:
+        st.session_state.processing = False
+    
     colw1, colw2 = st.columns(2)
 
     topics_dir = Path(config.get_stage_dir("topics"))
@@ -390,7 +407,8 @@ with tab1:
 
     with colw1:
         st.markdown("**Step 1 · Final Decision**")
-        if st.button("🏆 Generate Decision", key="btn_final_decision", use_container_width=True):
+        if st.button("🏆 Generate Decision", key="btn_final_decision", use_container_width=True, disabled=st.session_state.processing):
+            st.session_state.processing = True
             with st.spinner("Generating FINAL_DECISION..."):
                 try:
                     config.set_working_date(date_str)
@@ -398,11 +416,15 @@ with tab1:
                     st.success("FINAL_DECISION.md generated!")
                 except Exception as e:
                     st.error(f"Failed: {e}")
+                finally:
+                    st.session_state.processing = False
+                    st.rerun()
         render_file_preview("FINAL_DECISION.md (topics)", final_decision_file, height=180, key_suffix="workflow_final_decision")
 
         st.markdown("---")
         st.markdown("**Step 3 · Draft**")
-        if st.button("✍️ Write Draft", key="btn_draft", use_container_width=True):
+        if st.button("✍️ Write Draft", key="btn_draft", use_container_width=True, disabled=st.session_state.processing):
+            st.session_state.processing = True
             with st.spinner("Running Drafter..."):
                 try:
                     config.set_working_date(date_str)
@@ -410,11 +432,15 @@ with tab1:
                     st.success("Draft generated!")
                 except Exception as e:
                     st.error(f"Failed: {e}")
+                finally:
+                    st.session_state.processing = False
+                    st.rerun()
         render_file_preview("draft.md", draft_file, height=180, key_suffix="workflow_draft")
 
     with colw2:
         st.markdown("**Step 2 · Research**")
-        if st.button("🔬 Start Research", key="btn_research", use_container_width=True):
+        if st.button("🔬 Start Research", key="btn_research", use_container_width=True, disabled=st.session_state.processing):
+            st.session_state.processing = True
             with st.spinner("Running Researcher..."):
                 try:
                     config.set_working_date(date_str)
@@ -422,14 +448,19 @@ with tab1:
                     st.success("Research completed!")
                 except Exception as e:
                     st.error(f"Failed: {e}")
+                finally:
+                    st.session_state.processing = False
+                    st.rerun()
         render_file_preview("notes.txt (research)", research_notes_file, height=180, key_suffix="workflow_research")
 
         st.markdown("---")
         st.markdown("**Step 4 · Refine (可选)**")
         refine_instruction = st.text_input("Refine instruction", value="整体润色并强化逻辑连贯，突出价值", key="refine_instruction_workflow")
-        if st.button("✨ Refine Final.md", key="btn_refine", use_container_width=True):
+        if st.button("✨ Refine Final.md", key="btn_refine", use_container_width=True, disabled=st.session_state.processing):
+            st.session_state.processing = True
             if not refine_instruction.strip():
                 st.warning("请输入润色指令")
+                st.session_state.processing = False
             else:
                 with st.spinner("Refining..."):
                     try:
@@ -438,11 +469,15 @@ with tab1:
                         st.success("Refine 完成，已写入 final.md")
                     except Exception as e:
                         st.error(f"Failed: {e}")
+                    finally:
+                        st.session_state.processing = False
+                        st.rerun()
         render_file_preview("final.md", final_file, height=140, key_suffix="workflow_refine_final")
 
         st.markdown("---")
         st.markdown("**Step 5 · Audit (可选)**")
-        if st.button("🕵️ Run Audit", key="btn_audit", use_container_width=True):
+        if st.button("🕵️ Run Audit", key="btn_audit", use_container_width=True, disabled=st.session_state.processing):
+            st.session_state.processing = True
             with st.spinner("Auditing..."):
                 try:
                     report = auditor.audit_article()
@@ -454,6 +489,9 @@ with tab1:
                         st.info("Audit completed. See logs/output for details.")
                 except Exception as e:
                     st.error(f"Audit failed: {e}")
+                finally:
+                    st.session_state.processing = False
+                    st.rerun()
         if audit_file.exists():
             render_file_preview("audit_report.md", audit_file, height=140, key_suffix="workflow_audit")
         else:
@@ -462,7 +500,8 @@ with tab1:
         st.markdown("---")
         st.markdown("**Step 6 · Format (HTML)**")
         fmt_style = st.selectbox("Style", ["green", "blue", "orange", "minimal", "purple", "livid", "vue", "typewriter"], key="fmt_style_sidebar")
-        if st.button("🖨️ Generate HTML", key="btn_format", use_container_width=True):
+        if st.button("🖨️ Generate HTML", key="btn_format", use_container_width=True, disabled=st.session_state.processing):
+            st.session_state.processing = True
             with st.spinner("Formatting to HTML..."):
                 try:
                     config.set_working_date(date_str)
@@ -470,6 +509,9 @@ with tab1:
                     st.success("HTML generated (output.html)!")
                 except Exception as e:
                     st.error(f"Failed: {e}")
+                finally:
+                    st.session_state.processing = False
+                    st.rerun()
         render_file_preview("final.md", final_file, height=120, key_suffix="workflow_format_final")
         render_file_preview("output.html (raw)", html_file, height=120, key_suffix="workflow_format_html")
 

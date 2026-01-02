@@ -22,7 +22,7 @@ from bs4 import BeautifulSoup
 from openai import OpenAI
 from config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, PROXY_URL, REQUEST_TIMEOUT,
-    TAVILY_API_KEY, get_topic_report_file, get_today_dir,
+    TAVILY_API_KEY, PERPLEXITY_API_KEY, EXA_API_KEY, get_topic_report_file, get_today_dir,
     get_stage_dir, get_research_notes_file, get_history_file, get_logger, retryable,
     track_cost, WATCHLIST, TREND_SOURCES, OPERATIONAL_PHASE, PHASE_CONFIG,
     EFFICIENCY_KEYWORDS, PAIN_KEYWORDS, RADAR_QUERIES,
@@ -145,54 +145,127 @@ def _dedup_search_plan(search_plan: List[Dict[str, str]], history_items: List[Di
 
 CURRENT_CONFIG = PHASE_CONFIG[OPERATIONAL_PHASE]
 
-# ================= Tavily 搜索工具 =================
+# ================= 搜索工具 (多级降级) =================
 
 class WebSearchTool:
     def __init__(self):
-        self.api_key = TAVILY_API_KEY
-        self.enabled = bool(self.api_key and len(self.api_key) > 10)
-        if self.enabled:
-            log_print("   ✅ Tavily Search API 已启用")
-    
-    def search(self, query, max_results=5, include_answer=False, topic=None, days=3):
-        """Tavily 搜索，强制只返回最近 N 天的新闻"""
+        self.tavily_key = TAVILY_API_KEY
+        self.pplx_key = PERPLEXITY_API_KEY
+        self.exa_key = EXA_API_KEY
+        
+        self.pplx_enabled = bool(self.pplx_key and len(self.pplx_key) > 10)
+        self.tavily_enabled = bool(self.tavily_key and len(self.tavily_key) > 10)
+        self.exa_enabled = bool(self.exa_key and len(self.exa_key) > 10)
+        
+        self.enabled = self.pplx_enabled or self.tavily_enabled or self.exa_enabled
+        
+        if self.pplx_enabled: log_print("   ✅ Perplexity API 已就绪 (首选)")
+        if self.tavily_enabled: log_print("   ✅ Tavily API 已就绪 (备选)")
+        if self.exa_enabled: log_print("   ✅ Exa AI API 已就绪 (兜底)")
+
+    def search(self, query, max_results=5, include_answer=True, topic=None, days=3):
+        """
+        多级搜索降级逻辑: Perplexity -> Tavily -> Exa
+        """
         if not self.enabled: return []
-        log_print(f"   🔍 Tavily (最近{days}天): {query}")
+
+        # 1. 首选 Perplexity
+        if self.pplx_enabled:
+            results = self._search_perplexity(query)
+            if results: return results
+
+        # 2. 备选 Tavily
+        if self.tavily_enabled:
+            results = self._search_tavily(query, max_results, include_answer, topic, days)
+            if results: return results
+
+        # 3. 兜底 Exa
+        if self.exa_enabled:
+            results = self._search_exa(query, max_results)
+            if results: return results
+
+        return []
+
+    def _search_perplexity(self, query):
+        """Perplexity API: 获取模型生成的摘要作为核心研究素材"""
+        log_print(f"   🔍 Perplexity 搜索: {query}")
+        url = "https://api.perplexity.ai/chat/completions"
+        payload = {
+            "model": "sonar",
+            "messages": [
+                {"role": "system", "content": "你是一个专业的AI研究助手。请针对用户的查询提供详细、准确且带有来源摘要的回答。"},
+                {"role": "user", "content": query}
+            ],
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "search_domain_filter": None,
+            "return_images": False,
+            "return_related_questions": False,
+            "search_recency_filter": "week",
+            "top_k": 0,
+            "stream": False,
+            "presence_penalty": 0,
+            "frequency_penalty": 1
+        }
+        headers = {
+            "Authorization": f"Bearer {self.pplx_key}",
+            "Content-Type": "application/json"
+        }
+        
+        try:
+            proxies = PROXY_URL if PROXY_URL else None
+            with httpx.Client(timeout=45, proxy=proxies, trust_env=False) as client:
+                @retryable
+                @track_cost(context="perplexity_search")
+                def _post():
+                    return client.post(url, json=payload, headers=headers)
+                
+                resp = _post()
+                if resp.status_code != 200:
+                    log_print(f"      ⚠️ Perplexity 报错: {resp.status_code}")
+                    return None
+                
+                data = resp.json()
+                content = data['choices'][0]['message']['content']
+                # 将生成的摘要作为第一个结果返回，body 设为全文
+                return [{"title": "Perplexity AI Summary", "body": content, "url": "https://perplexity.ai"}]
+        except Exception as e:
+            log_print(f"      ❌ Perplexity 调用失败: {e}")
+            return None
+
+    def _search_tavily(self, query, max_results=5, include_answer=False, topic=None, days=3):
+        """原有的 Tavily 搜索逻辑"""
+        log_print(f"   🔍 Tavily 搜索 (最近{days}天): {query}")
         url = "https://api.tavily.com/search"
         payload = {
-            "api_key": self.api_key,
+            "api_key": self.tavily_key,
             "query": query,
-            "search_depth": "advanced",  # 使用 advanced 以支持时间过滤
+            "search_depth": "advanced",
             "max_results": max_results,
             "include_answer": include_answer,
-            "days": days                  # 只看最近 N 天的热点
+            "days": days
         }
-        if topic:
-            payload["topic"] = topic
+        if topic: payload["topic"] = topic
             
         try:
-            # Tavily 需要代理 (如果配置了 PROXY_URL)
-            # 使用 trust_env=False 防止读取系统环境变量导致混乱，显式指定 proxy
             proxies = PROXY_URL if PROXY_URL else None
             with httpx.Client(timeout=30, proxy=proxies, trust_env=False) as client:
                 @retryable
                 def _post():
                     resp = client.post(url, json=payload)
-                    # 如果是 429 (Rate Limit) 或 432 (Tavily Usage Limit)，直接抛出不可重试异常
                     if resp.status_code in [429, 432]:
-                        log_print(f"      ⚠️ Tavily 额度已耗尽或受限 ({resp.status_code})")
+                        log_print(f"      ⚠️ Tavily 额度受限 ({resp.status_code})")
                         return resp
                     resp.raise_for_status()
                     return resp
 
                 resp = _post()
-                if resp.status_code != 200:
-                    return []
+                if resp.status_code != 200: return None
                 
                 data = resp.json()
                 results = []
                 if data.get('answer'):
-                    results.append({"title": "AI Summary", "body": data['answer'], "url": ""})
+                    results.append({"title": "Tavily AI Summary", "body": data['answer'], "url": ""})
                 for r in data.get('results', []):
                     results.append({
                         "title": r.get('title', ''),
@@ -201,8 +274,48 @@ class WebSearchTool:
                     })
                 return results
         except Exception as e:
-            log_print(f"      ❌ 搜索失败: {e}")
-            return []
+            log_print(f"      ❌ Tavily 失败: {e}")
+            return None
+
+    def _search_exa(self, query, max_results=5):
+        """Exa AI (原 Metaphor) 兜底搜索"""
+        log_print(f"   🔍 Exa AI 兜底搜索: {query}")
+        url = "https://api.exa.ai/search"
+        headers = {
+            "x-api-key": self.exa_key,
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "query": query,
+            "useAutoprompt": True,
+            "numResults": max_results,
+            "type": "neural"
+        }
+        try:
+            proxies = PROXY_URL if PROXY_URL else None
+            with httpx.Client(timeout=30, proxy=proxies, trust_env=False) as client:
+                @retryable
+                @track_cost(context="exa_search")
+                def _post():
+                    return client.post(url, json=payload, headers=headers)
+                
+                resp = _post()
+                if resp.status_code != 200:
+                    log_print(f"      ⚠️ Exa AI 报错: {resp.status_code}")
+                    return None
+                
+                data = resp.json()
+                results = []
+                for r in data.get('results', []):
+                    results.append({
+                        "title": r.get('title', ''),
+                        "body": r.get('text', '') or r.get('snippet', ''),
+                        "url": r.get('url', '')
+                    })
+                return results
+        except Exception as e:
+            log_print(f"      ❌ Exa AI 调用失败: {e}")
+            return None
 
 # ================= 辅助函数 =================
 
@@ -267,18 +380,18 @@ class TrendingDiscoverer:
     def discover_external_hotspots(self) -> List[str]:
         """
         从外部聚合源发现热点。
-        v4.6: 增加 Product Hunt, Hacker News 和 V2EX 的实时信号探测
+        v4.6: 增加 Product Hunt, Hacker News 和 V2EX 的实时信号探测 (并发优化)
         """
         self.logger.info("   🔍 [TrendingDiscoverer] 正在探测全网社交媒体与即时热搜...")
         
-        # 1. PH/HN/V2EX 实时信号 (利用 Jina Reader 极速扫描)
-        realtime_queries = [
+        # 1. 实时信号 (利用 Jina Reader 极速扫描)
+        realtime_urls = [
             "https://www.producthunt.com",
             "https://news.ycombinator.com",
             "https://www.v2ex.com/?tab=hot"
         ]
         
-        # 2. 传统热搜探测
+        # 2. 传统热搜探测 (Perplexity/Tavily)
         search_queries = [
             "微博热搜榜 site:s.weibo.com",
             "百度热搜 实时",
@@ -288,25 +401,40 @@ class TrendingDiscoverer:
         
         results = []
         
-        # 并发执行实时信号抓取
-        if self.search_tool and self.search_tool.enabled:
-            # 抓取实时信号
-            with httpx.Client(proxy=PROXY_URL, timeout=15) as client:
-                for url in realtime_queries:
-                    try:
-                        resp = client.get(f"https://r.jina.ai/{url}")
-                        if resp.status_code == 200:
-                            # 提取前 500 字，由后续 LLM 提炼
-                            snippet = resp.text[:1000].replace("\n", " ")
-                            results.append(f"Source[{url}]: {snippet}")
-                    except:
-                        continue
+        # 并发执行 Jina 抓取
+        def fetch_jina(url):
+            try:
+                headers = {"x-no-cache": "true"}
+                with httpx.Client(proxy=PROXY_URL, timeout=15) as client:
+                    resp = client.get(f"https://r.jina.ai/{url}", headers=headers)
+                    if resp.status_code == 200:
+                        text_clean = resp.text[:1000].replace('\n', ' ')
+                        return f"Source[{url}]: {text_clean}"
+            except:
+                pass
+            return None
 
-            # 抓取搜索热点
-            for q in search_queries:
+        # 并发执行搜索探测
+        def fetch_search(q):
+            if self.search_tool and self.search_tool.enabled:
                 res = self.search_tool.search(q, max_results=2, days=1)
-                for r in res:
-                    results.append(f"{r['title']}: {r['body'][:100]}")
+                return [f"{r['title']}: {r['body'][:100]}" for r in res]
+            return []
+
+        with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_FETCHES) as executor:
+            # 提交 Jina 任务
+            jina_futures = {executor.submit(fetch_jina, url): url for url in realtime_urls}
+            # 提交搜索任务
+            search_futures = {executor.submit(fetch_search, q): q for q in search_queries}
+            
+            # 收集结果
+            for future in as_completed(jina_futures):
+                res = future.result()
+                if res: results.append(res)
+                
+            for future in as_completed(search_futures):
+                res = future.result()
+                if res: results.extend(res)
         
         return results
 
@@ -771,7 +899,7 @@ def step1_broad_scan_and_plan(
     log_print(f"      🎲 随机抽取: {selected_efficiency}")
     for kw in selected_efficiency:
         # B路: 强制追加高质量信源，过滤 SEO 垃圾
-        q = f"{kw} 推荐 site:sspai.com OR site:36kr.com OR site:v2ex.com OR site:zhihu.com"
+        q = f"{kw} 推荐 site:sspai.com OR site:36kr.com OR site:v2ex.com OR site:mp.weixin.qq.com"
         res = search_tool.search(q, max_results=2, days=3)
         pre_scan_results.extend(res)
         
@@ -785,7 +913,7 @@ def step1_broad_scan_and_plan(
     log_print(f"      🎲 随机抽取: {selected_pain}")
     for kw in selected_pain:
         # C路: 强制追加社区信源
-        q = f"{kw} 吐槽 避坑 site:v2ex.com OR site:reddit.com OR site:zhihu.com"
+        q = f"{kw} 吐槽 避坑 site:v2ex.com OR site:reddit.com OR site:mp.weixin.qq.com"
         res = search_tool.search(q, max_results=2, days=3)
         pre_scan_results.extend(res)
     
@@ -836,7 +964,6 @@ def _clean_text(text: Optional[str], max_len: int = 100) -> str:
     if not text:
         return ""
     # 移除多余空白和换行
-    import re
     text = re.sub(r'\s+', ' ', text).strip()
     # 移除常见 HTML 标签残留
     text = re.sub(r'<[^>]+>', '', text)
@@ -885,7 +1012,7 @@ def step2_deep_scan(
         # 1. 社交/痛点搜索 (核心)
         if social_q:
             log_print(f"      💬 社交舆情 (权重 {w_social}): {social_q}")
-            full_social_q = f"{social_q} site:mp.weixin.qq.com OR site:xiaohongshu.com OR site:zhihu.com OR site:bilibili.com"
+            full_social_q = f"{social_q} site:mp.weixin.qq.com OR site:xiaohongshu.com OR site:bilibili.com"
             res = search_tool.search(full_social_q, max_results=social_max_results)
             if res:
                 event_data.append(f"\n**💬 用户反馈** ({social_q})")
@@ -1360,7 +1487,6 @@ def final_summary(dry_run=False):
 
             # === 自动更新历史记录 (Memory Update) ===
             try:
-                import re
                 # 优化正则：兼容中英文冒号、忽略前后空格、多行匹配
                 # 模式1: **标题**: xxx
                 title_pattern1 = r'\*\*标题\*\*\s*[:：]\s*(.+)'
